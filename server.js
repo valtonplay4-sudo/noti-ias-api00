@@ -63,7 +63,7 @@ app.get('/script/:scriptId.js', async (req, res) => {
       }
     }
 
-    // SCRIPT EXATO ENVIADO AO BLOGGER (Com verificação de ?spoofer=on)
+    // SCRIPT EXATO ENVIADO AO BLOGGER (Preservado da versão antiga)
     const scriptContent = `
 (function() {
     'use strict';
