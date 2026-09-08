@@ -8,11 +8,8 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
 
-// URL do seu Firebase Realtime Database
+// Firebase Realtime Database
 const FIREBASE_DB_URL = "https://maestro-server-pro-default-rtdb.firebaseio.com";
-
-// CONFIGURAÇÃO DE AMBIENTE: Altere para 'false' quando quiser ativar o limite de 10 min e trava de dispositivo
-const IS_UNLIMITED_TEST_MODE = true; 
 
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -21,7 +18,7 @@ app.get('/', (req, res) => {
     <html lang="pt">
     <head>
       <meta charset="UTF-8">
-      <title>AdGhost | Servidor Ativo</title>
+      <title>Anúncio Fantasma | API</title>
       <style>
         body { font-family: sans-serif; background: #030712; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
         .card { background: #0f172a; padding: 30px; border-radius: 16px; text-align: center; border: 1px solid rgba(255,255,255,0.1); }
@@ -31,8 +28,8 @@ app.get('/', (req, res) => {
     </head>
     <body>
       <div class="card">
-        <h2>Servidor AdGhost Ativo</h2>
-        <p>Status Teste: ${IS_UNLIMITED_TEST_MODE ? '<b>ILIMITADO (DEV MODE)</b>' : 'PADRÃO (10 MIN)'}</p>
+        <h2>Servidor Anúncio Fantasma Ativo</h2>
+        <p>Validação de Licenças em Tempo Real Conectada ao Firebase</p>
       </div>
     </body>
     </html>
@@ -40,7 +37,7 @@ app.get('/', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// ROTA DO SCRIPT GERADO POR ID ÚNICO (/script/:scriptId.js)
+// ROTA DO SCRIPT DO BLOGGER (/script/:scriptId.js)
 // -------------------------------------------------------------
 app.get('/script/:scriptId.js', async (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
@@ -48,62 +45,37 @@ app.get('/script/:scriptId.js', async (req, res) => {
 
   const scriptId = req.params.scriptId;
   const referer = req.get('Referer') || req.get('Origin') || '';
-  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
 
   try {
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
     const license = response.data;
 
+    // 1. Se a licença não existe
     if (!license) {
-      return res.status(200).send(`console.warn("AdGhost: Licença ou Script inexistente.");`);
+      return res.status(200).send(`console.warn("Anúncio Fantasma: Licença não encontrada.");`);
     }
 
-    if (license.active === false) {
-      return res.status(200).send(`console.warn("AdGhost: Licença desativada pelo Administrador.");`);
+    // 2. BLOQUEIO OBRIGATÓRIO: Se o ADMIN ainda não aprovou (active === false)
+    if (license.active !== true) {
+      return res.status(200).send(`console.warn("Anúncio Fantasma: Licença PENDENTE de aprovação do Administrador.");`);
     }
 
-    // 1. Validação de Domínio Autorizado
+    // 3. Validação de Domínio Autorizado
     if (referer && license.domain) {
       let cleanReferer = referer.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
       let cleanAllowedDomain = license.domain.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
 
       if (!cleanReferer.includes(cleanAllowedDomain) && !cleanAllowedDomain.includes(cleanReferer)) {
-        return res.status(200).send(`console.warn("AdGhost: Domínio [${cleanReferer}] não autorizado.");`);
+        return res.status(200).send(`console.warn("Anúncio Fantasma: Domínio [${cleanReferer}] não autorizado para esta licença.");`);
       }
     }
 
-    // 2. Trava de Dispositivo Único (Preparada para ativação)
-    if (!IS_UNLIMITED_TEST_MODE && license.lockToSingleDevice) {
-      if (!license.boundDeviceId) {
-        // Vincula no primeiro uso
-        await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
-          boundDeviceId: clientIp
-        });
-      } else if (license.boundDeviceId !== clientIp) {
-        return res.status(200).send(`console.warn("AdGhost: Acesso bloqueado. Esta licença está vinculada a outro dispositivo.");`);
-      }
+    // 4. Validação de Validade / Expiração
+    if (license.expiresAt && Date.now() > new Date(license.expiresAt).getTime()) {
+      return res.status(200).send(`console.warn("Anúncio Fantasma: Licença expirada.");`);
     }
 
-    // 3. Validação de Tempo (Ignorada se IS_UNLIMITED_TEST_MODE for true)
-    if (!IS_UNLIMITED_TEST_MODE) {
-      if (license.isTest) {
-        if (!license.startedAt) {
-          const startTime = new Date().toISOString();
-          const expirationTime = new Date(Date.now() + (10 * 60 * 1000)).toISOString(); 
-
-          await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
-            startedAt: startTime,
-            expiresAt: expirationTime
-          });
-        } else if (Date.now() > new Date(license.expiresAt).getTime()) {
-          return res.status(200).send(`console.warn("AdGhost: Teste grátis de 10 minutos expirado.");`);
-        }
-      } else if (license.expiresAt && Date.now() > new Date(license.expiresAt).getTime()) {
-        return res.status(200).send(`console.warn("AdGhost: Licença paga expirada.");`);
-      }
-    }
-
-    // Script JS Executável no Navegador do Leitor/Administrador
+    // SE APROVADO PELO ADMIN E VÁLIDO: Executa o Script no Blogger
     const scriptContent = `
 (function() {
     'use strict';
@@ -173,17 +145,17 @@ app.get('/script/:scriptId.js', async (req, res) => {
     window.currentFakeUserId = currentUserId;
     spoofFingerprint();
 
-    console.log('[AdGhost Ativo] ID: ${scriptId} | Dispositivo: ' + currentUserId);
+    console.log('[Anúncio Fantasma Ativo] Licença Aprovada ID: ${scriptId}');
 })();
     `;
 
     return res.status(200).send(scriptContent);
 
   } catch (error) {
-    return res.status(200).send(`console.warn("AdGhost: Erro no servidor de licenças.");`);
+    return res.status(200).send(`console.warn("Anúncio Fantasma: Erro interno de validação no servidor.");`);
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`Servidor AdGhost rodando na porta ${PORT}`);
+  console.log(`Servidor Anúncio Fantasma rodando na porta ${PORT}`);
 });
