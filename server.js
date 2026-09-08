@@ -8,12 +8,12 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
 
-// Firebase Database Realtime URL
+// URL do seu Firebase Realtime Database
 const FIREBASE_DB_URL = "https://maestro-server-pro-default-rtdb.firebaseio.com";
 
-// -------------------------------------------------------------
-// 1. PÁGINA INFORMATIVA INICIAL (HOME)
-// -------------------------------------------------------------
+// CONFIGURAÇÃO DE AMBIENTE: Altere para 'false' quando quiser ativar o limite de 10 min e trava de dispositivo
+const IS_UNLIMITED_TEST_MODE = true; 
+
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`
@@ -21,19 +21,18 @@ app.get('/', (req, res) => {
     <html lang="pt">
     <head>
       <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>AdGhost | Servidor Ativo</title>
       <style>
         body { font-family: sans-serif; background: #030712; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .card { background: #0f172a; padding: 30px; border-radius: 16px; text-align: center; max-width: 420px; border: 1px solid rgba(255,255,255,0.1); }
-        h2 { margin-top: 0; color: #a855f7; }
-        p { color: #94a3b8; font-size: 14px; line-height: 1.5; }
+        .card { background: #0f172a; padding: 30px; border-radius: 16px; text-align: center; border: 1px solid rgba(255,255,255,0.1); }
+        h2 { color: #a855f7; margin-top: 0; }
+        p { color: #94a3b8; }
       </style>
     </head>
     <body>
       <div class="card">
         <h2>Servidor AdGhost Ativo</h2>
-        <p>Aguardando chamadas de scripts individuais por ID único.</p>
+        <p>Status Teste: ${IS_UNLIMITED_TEST_MODE ? '<b>ILIMITADO (DEV MODE)</b>' : 'PADRÃO (10 MIN)'}</p>
       </div>
     </body>
     </html>
@@ -41,7 +40,7 @@ app.get('/', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 2. ROTA DINÂMICA UNIVERSAL GERADA PELO ADM (:scriptId.js)
+// ROTA DO SCRIPT GERADO POR ID ÚNICO (/script/:scriptId.js)
 // -------------------------------------------------------------
 app.get('/script/:scriptId.js', async (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
@@ -49,48 +48,62 @@ app.get('/script/:scriptId.js', async (req, res) => {
 
   const scriptId = req.params.scriptId;
   const referer = req.get('Referer') || req.get('Origin') || '';
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
 
   try {
-    // Busca a licença vinculada a este ID único no Firebase
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
     const license = response.data;
 
-    // Se o ID não existir ou estiver inativo
     if (!license) {
-      return res.status(200).send(`console.warn("AdGhost: Script ID inexistente ou cancelado.");`);
-    }
-    if (license.active === false) {
-      return res.status(200).send(`console.warn("AdGhost: Licença inativa pelo Administrador.");`);
+      return res.status(200).send(`console.warn("AdGhost: Licença ou Script inexistente.");`);
     }
 
-    // Validação de Domínio (Garante que só roda no Blogger cadastrado)
+    if (license.active === false) {
+      return res.status(200).send(`console.warn("AdGhost: Licença desativada pelo Administrador.");`);
+    }
+
+    // 1. Validação de Domínio Autorizado
     if (referer && license.domain) {
       let cleanReferer = referer.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
       let cleanAllowedDomain = license.domain.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
 
       if (!cleanReferer.includes(cleanAllowedDomain) && !cleanAllowedDomain.includes(cleanReferer)) {
-        return res.status(200).send(`console.warn("AdGhost: Domínio [${cleanReferer}] não autorizado para este Script.");`);
+        return res.status(200).send(`console.warn("AdGhost: Domínio [${cleanReferer}] não autorizado.");`);
       }
     }
 
-    // Controle do Teste Grátis de 10 Minutos (Ativa contagem no 1º acesso no blog)
-    if (license.isTest) {
-      if (!license.startedAt) {
-        const startTime = new Date().toISOString();
-        const expirationTime = new Date(Date.now() + (10 * 60 * 1000)).toISOString(); 
-
+    // 2. Trava de Dispositivo Único (Preparada para ativação)
+    if (!IS_UNLIMITED_TEST_MODE && license.lockToSingleDevice) {
+      if (!license.boundDeviceId) {
+        // Vincula no primeiro uso
         await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
-          startedAt: startTime,
-          expiresAt: expirationTime
+          boundDeviceId: clientIp
         });
-      } else if (Date.now() > new Date(license.expiresAt).getTime()) {
-        return res.status(200).send(`console.warn("AdGhost: Teste grátis de 10 minutos expirado.");`);
+      } else if (license.boundDeviceId !== clientIp) {
+        return res.status(200).send(`console.warn("AdGhost: Acesso bloqueado. Esta licença está vinculada a outro dispositivo.");`);
       }
-    } else if (license.expiresAt && Date.now() > new Date(license.expiresAt).getTime()) {
-      return res.status(200).send(`console.warn("AdGhost: Licença paga expirada.");`);
     }
 
-    // CÓDIGO JS PRINCIPAL ENTREGUE AO BLOGGER
+    // 3. Validação de Tempo (Ignorada se IS_UNLIMITED_TEST_MODE for true)
+    if (!IS_UNLIMITED_TEST_MODE) {
+      if (license.isTest) {
+        if (!license.startedAt) {
+          const startTime = new Date().toISOString();
+          const expirationTime = new Date(Date.now() + (10 * 60 * 1000)).toISOString(); 
+
+          await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
+            startedAt: startTime,
+            expiresAt: expirationTime
+          });
+        } else if (Date.now() > new Date(license.expiresAt).getTime()) {
+          return res.status(200).send(`console.warn("AdGhost: Teste grátis de 10 minutos expirado.");`);
+        }
+      } else if (license.expiresAt && Date.now() > new Date(license.expiresAt).getTime()) {
+        return res.status(200).send(`console.warn("AdGhost: Licença paga expirada.");`);
+      }
+    }
+
+    // Script JS Executável no Navegador do Leitor/Administrador
     const scriptContent = `
 (function() {
     'use strict';
@@ -98,10 +111,8 @@ app.get('/script/:scriptId.js', async (req, res) => {
     const STORAGE_KEY = 'user_spoofer_enabled';
     const VISITS_TO_RESET = 2;
 
-    // 1. Identifica os comandos de ativação pela URL do blog (?spoofer=on / ?spoofer=off)
     try {
         const urlParams = new URLSearchParams(window.location.search);
-        
         if (urlParams.get('spoofer') === 'on') {
             localStorage.setItem(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -112,12 +123,10 @@ app.get('/script/:scriptId.js', async (req, res) => {
         }
     } catch(e) {}
 
-    // 2. Bloqueia a execução para leitores normais (só roda se este navegador usou ?spoofer=on)
     if (localStorage.getItem(STORAGE_KEY) !== 'true') {
         return;
     }
 
-    // 3. Simulador/Spoofer para o dispositivo ativado
     function generateNewUserId() {
         return 'device_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
     }
@@ -164,7 +173,7 @@ app.get('/script/:scriptId.js', async (req, res) => {
     window.currentFakeUserId = currentUserId;
     spoofFingerprint();
 
-    console.log('[AdGhost Ativo] ID do Script: ${scriptId} | Dispositivo: ' + currentUserId);
+    console.log('[AdGhost Ativo] ID: ${scriptId} | Dispositivo: ' + currentUserId);
 })();
     `;
 
