@@ -2,8 +2,6 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -26,13 +24,12 @@ app.get('/', (req, res) => {
     <h2>👻 Servidor Anúncio Fantasma Ativo</h2>
     <p>Status: Online ✅</p>
     <p>Versão: 3.0</p>
-    <p>Scripts disponíveis: ${fs.readdirSync(__dirname).filter(f => f.endsWith('.js') && f !== 'server.js').length}</p>
+    <p>Uptime: ${process.uptime().toFixed(0)}s</p>
   `);
 });
 
 // ==================== ENTREGA DO SCRIPT ====================
 app.get('/script/:scriptId.js', async (req, res) => {
-  // HEADERS
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-cache');
@@ -43,13 +40,11 @@ app.get('/script/:scriptId.js', async (req, res) => {
   console.log(`[${scriptId}] 📥 Requisição recebida de: ${referer || 'Desconhecido'}`);
 
   try {
-    // ==================== BUSCAR LICENÇA NO FIREBASE ====================
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
     const license = response.data;
 
     console.log(`[${scriptId}] 📋 Licença:`, license ? 'ENCONTRADA' : 'NÃO ENCONTRADA');
 
-    // ==================== LICENÇA NÃO ENCONTRADA ====================
     if (!license) {
       console.log(`[${scriptId}] ❌ Licença não encontrada`);
       return res.status(200).send(`
@@ -60,8 +55,6 @@ console.warn("[Anúncio Fantasma] ❌ Licença não encontrada. Contate o suport
     // ==================== VERIFICAR PLANO E ATIVAÇÃO ====================
     const isFree = license.planName === 'Grátis';
     
-    // Plano grátis: ativo automaticamente
-    // Plano pago: precisa de aprovação (active === true)
     if (!isFree && license.active !== true) {
       console.log(`[${scriptId}] ⏳ Aguardando aprovação. Plano: ${license.planName}`);
       return res.status(200).send(`
@@ -81,11 +74,12 @@ console.warn("[Anúncio Fantasma] ⏰ Licença expirada. Renove seu plano.");
       }
     }
 
-    // ==================== VALIDAR DOMÍNIO ====================
+    // ==================== VALIDAR DOMÍNIO (CORRIGIDO) ====================
     if (referer && license.domain) {
       let cleanReferer = referer.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
       let cleanDomain = license.domain.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
 
+      // 🔥 CORREÇÃO: Verifica se o domínio está contido no referer (mais flexível)
       const isMatch = cleanReferer.includes(cleanDomain) || 
                       cleanDomain.includes(cleanReferer) ||
                       cleanReferer === cleanDomain;
@@ -101,13 +95,11 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
     console.log(`[${scriptId}] ✅ Script entregue para: ${license.domain} | Plano: ${license.planName}`);
 
     // ==================== SCRIPT COMPLETO ====================
-    // Este é o SCRIPT que vai para o Blogger
     const scriptContent = `
 // =============================================
 // ANÚNCIO FANTASMA - ${license.domain}
 // Plano: ${license.planName}
 // Licença: ${scriptId}
-// Criado em: ${new Date().toISOString()}
 // =============================================
 
 (function() {
@@ -120,9 +112,16 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
     const DOMAIN = '${license.domain}';
     const PLAN = '${license.planName}';
 
+    console.log('👻 Anúncio Fantasma carregado!');
+    console.log('📋 Licença:', LICENSE_ID);
+    console.log('🌐 Domínio:', DOMAIN);
+    console.log('📊 Plano:', PLAN);
+
     // ==================== ATIVAÇÃO VIA URL ====================
     try {
         const urlParams = new URLSearchParams(window.location.search);
+        
+        console.log('🔍 Parâmetros da URL:', urlParams.toString());
         
         if (urlParams.get('spoofer') === 'on') {
             localStorage.setItem(STORAGE_KEY, 'true');
@@ -138,7 +137,9 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
             console.log('%c👻 ANÚNCIO FANTASMA DESATIVADO!', 'color: #ff4444; font-weight: bold; font-size: 16px;');
             return;
         }
-    } catch(e) {}
+    } catch(e) {
+        console.error('❌ Erro ao processar URL:', e);
+    }
 
     // ==================== VERIFICAÇÃO ====================
     if (localStorage.getItem(STORAGE_KEY) !== 'true') {
@@ -186,7 +187,6 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
 
     visitCount++;
 
-    // A cada 2 visitas, RESETA TUDO
     if (visitCount >= VISITS_TO_RESET || !currentUserId) {
         currentUserId = generateNewUserId();
         visitCount = 1;
