@@ -1,18 +1,55 @@
-// ==================== BACKEND CORRIGIDO ====================
+// ==================== BACKEND COMPLETO COM REMOÇÃO DE COOKIES ====================
+const express = require('express');
+const cors = require('cors');
+const axios = require('axios');
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+app.use(express.json());
+
+const FIREBASE_DB_URL = "https://maestro-server-pro-default-rtdb.firebaseio.com";
+
+// ==================== DURAÇÃO DOS PLANOS ====================
+const PLAN_DURATIONS = {
+  'Grátis': 600,
+  'Diário': 86400,
+  'Semanal': 604800,
+  'Mensal': 2592000
+};
+
+// ==================== HEALTH CHECK ====================
+app.get('/', (req, res) => {
+  res.send(`
+    <h2>👻 Servidor Anúncio Fantasma Ativo</h2>
+    <p>Status: Online ✅</p>
+    <p>Versão: 3.0</p>
+    <p>Uptime: ${process.uptime().toFixed(0)}s</p>
+  `);
+});
+
+// ==================== ENTREGA DO SCRIPT ====================
 app.get('/script/:scriptId.js', async (req, res) => {
     const scriptId = req.params.scriptId;
     const referer = req.get('Referer') || req.get('Origin') || '';
+
+    console.log(`[${scriptId}] 📥 Requisição de: ${referer || 'Desconhecido'}`);
 
     // 🔥 VALIDAÇÃO AUTOMÁTICA
     try {
         const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
         const license = response.data;
 
-        // 🔥 SE NÃO EXISTIR, CRIA UMA LICENÇA AUTOMATICAMENTE (APENAS PARA TESTE)
+        // 🔥 SE NÃO EXISTIR, CRIA UMA LICENÇA AUTOMATICAMENTE
         if (!license) {
             console.log(`[${scriptId}] ⚠️ Licença não encontrada. Criando automaticamente...`);
             
-            // Cria uma licença automática para teste
             const newLicense = {
                 id: scriptId,
                 active: true,
@@ -29,15 +66,12 @@ app.get('/script/:scriptId.js', async (req, res) => {
             await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, newLicense);
             console.log(`[${scriptId}] ✅ Licença criada automaticamente!`);
             
-            // Continua com a licença recém-criada
             return sendScript(res, scriptId, newLicense, referer);
         }
 
         // 🔥 SE EXISTIR, VERIFICA SE ESTÁ ATIVA
         if (license.active !== true) {
             console.log(`[${scriptId}] ⏳ Licença inativa. Ativando automaticamente...`);
-            
-            // Ativa automaticamente
             await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { active: true });
             license.active = true;
             console.log(`[${scriptId}] ✅ Licença ativada automaticamente!`);
@@ -48,8 +82,6 @@ app.get('/script/:scriptId.js', async (req, res) => {
             const expDate = new Date(license.expiresAt);
             if (Date.now() > expDate.getTime()) {
                 console.log(`[${scriptId}] ⏰ Licença expirada. Renovando automaticamente...`);
-                
-                // Renova automaticamente (apenas para teste)
                 const duration = PLAN_DURATIONS[license.planName] || 86400;
                 const newExpiresAt = new Date(Date.now() + duration * 1000).toISOString();
                 await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { 
@@ -73,8 +105,6 @@ app.get('/script/:scriptId.js', async (req, res) => {
 
             if (!isMatch) {
                 console.log(`[${scriptId}] 🚫 Domínio não autorizado. Atualizando automaticamente...`);
-                
-                // Atualiza o domínio automaticamente
                 await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { 
                     domain: cleanReferer 
                 });
@@ -112,11 +142,87 @@ function sendScript(res, scriptId, license, referer) {
     const DOMAIN = '${license.domain || 'Desconhecido'}';
     const PLAN = '${license.planName || 'Grátis'}';
 
+    // ==================== REMOVER AVISO DE COOKIES AUTOMATICAMENTE ====================
+    function removerAvisoCookies() {
+        try {
+            // Remove banners de cookies do Google
+            const seletores = [
+                '.cookie-consent',
+                '.cc-banner',
+                '.cc-window',
+                '.cookie-notice',
+                '.google-cookie-banner',
+                '.cookies-banner',
+                '.cookie-banner',
+                '#cookie-banner',
+                '#cookie-notice',
+                '.consent-banner',
+                '.gdpr-banner'
+            ];
+
+            seletores.forEach(seletor => {
+                const elementos = document.querySelectorAll(seletor);
+                elementos.forEach(el => {
+                    if (el) {
+                        el.style.display = 'none';
+                        el.style.opacity = '0';
+                        el.style.visibility = 'hidden';
+                        el.style.pointerEvents = 'none';
+                    }
+                });
+            });
+
+            // Remove também por texto (fallback)
+            const allElements = document.querySelectorAll('*');
+            allElements.forEach(el => {
+                if (el && el.innerText && (
+                    el.innerText.includes('cookies do Google') ||
+                    el.innerText.includes('Google cookies') ||
+                    el.innerText.includes('cookie consent') ||
+                    el.innerText.includes('Este site usa cookies')
+                )) {
+                    el.style.display = 'none';
+                    el.style.opacity = '0';
+                    el.style.visibility = 'hidden';
+                    el.style.pointerEvents = 'none';
+                }
+            });
+        } catch(e) {}
+    }
+
+    // Executa imediatamente
+    removerAvisoCookies();
+
+    // Executa novamente após o DOM carregar
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', removerAvisoCookies);
+    }
+
+    // Executa novamente após o carregamento completo
+    window.addEventListener('load', function() {
+        setTimeout(removerAvisoCookies, 1000);
+        setTimeout(removerAvisoCookies, 3000);
+    });
+
+    // Observer para remover banners que aparecem depois
+    try {
+        const observer = new MutationObserver(function() {
+            removerAvisoCookies();
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true
+        });
+    } catch(e) {}
+
     console.log('👻 Anúncio Fantasma carregado!');
     console.log('📋 Licença:', LICENSE_ID);
     console.log('🌐 Domínio:', DOMAIN);
     console.log('📊 Plano:', PLAN);
+    console.log('🍪 Aviso de cookies removido automaticamente!');
 
+    // ==================== ATIVAÇÃO VIA URL ====================
     try {
         const urlParams = new URLSearchParams(window.location.search);
         
@@ -124,20 +230,26 @@ function sendScript(res, scriptId, license, referer) {
             localStorage.setItem(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
             console.log('%c👻 ANÚNCIO FANTASMA ATIVADO!', 'color: #00ff88; font-weight: bold; font-size: 16px;');
+            alert('✅ Anúncio Fantasma ATIVADO neste dispositivo!');
         } 
         else if (urlParams.get('spoofer') === 'off') {
             localStorage.removeItem(STORAGE_KEY);
             window.history.replaceState({}, document.title, window.location.pathname);
             console.log('%c👻 ANÚNCIO FANTASMA DESATIVADO!', 'color: #ff4444; font-weight: bold; font-size: 16px;');
+            alert('❌ Anúncio Fantasma DESATIVADO neste dispositivo!');
             return;
         }
-    } catch(e) {}
+    } catch(e) {
+        console.error('❌ Erro ao processar URL:', e);
+    }
 
+    // ==================== VERIFICAÇÃO ====================
     if (localStorage.getItem(STORAGE_KEY) !== 'true') {
         console.log('%c👻 Anúncio Fantasma: Ative com ?spoofer=on', 'color: #ffaa00; font-weight: bold;');
         return;
     }
 
+    // ==================== FUNÇÕES ====================
     function generateNewUserId() {
         return 'device_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
     }
@@ -169,6 +281,7 @@ function sendScript(res, scriptId, license, referer) {
         } catch(e) {}
     }
 
+    // ==================== EXECUÇÃO ====================
     let visitCount = parseInt(localStorage.getItem('visit_counter') || '0');
     let currentUserId = localStorage.getItem('current_device_id');
 
@@ -207,3 +320,16 @@ function sendScript(res, scriptId, license, referer) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.status(200).send(scriptContent);
 }
+
+// ==================== FUNÇÕES AUXILIARES ====================
+function extrairDominio(url) {
+  if (!url) return 'desconhecido';
+  return url.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
+}
+
+// ==================== INICIAR SERVIDOR ====================
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor Anúncio Fantasma rodando na porta ${PORT}`);
+  console.log(`📡 Health: https://noti-ias-api00.onrender.com/`);
+  console.log(`📡 Script: https://noti-ias-api00.onrender.com/script/:id.js`);
+});
