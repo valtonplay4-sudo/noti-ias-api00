@@ -1,4 +1,3 @@
-// ==================== server.js COMPLETO ====================
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -6,7 +5,6 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ==================== CORS ====================
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -17,33 +15,22 @@ app.use(express.json());
 
 const FIREBASE_DB_URL = "https://maestro-server-pro-default-rtdb.firebaseio.com";
 
-// ==================== HEALTH CHECK ====================
 app.get('/', (req, res) => {
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(`
-    <h2>👻 Servidor Anúncio Fantasma Ativo</h2>
-    <p>Status: Online ✅</p>
-    <p>Versão: 3.0</p>
-    <p>Uptime: ${process.uptime().toFixed(0)}s</p>
-  `);
+  res.send(`<h2>👻 Servidor Anúncio Fantasma Ativo</h2><p>Status: Online ✅</p>`);
 });
 
-// ==================== ENTREGA DO SCRIPT ====================
 app.get('/script/:scriptId.js', async (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 'no-cache');
 
   const scriptId = req.params.scriptId;
   const referer = req.get('Referer') || req.get('Origin') || '';
 
-  console.log(`[${scriptId}] 📥 Requisição recebida de: ${referer || 'Desconhecido'}`);
+  console.log(`[${scriptId}] 📥 Requisição de: ${referer || 'Desconhecido'}`);
 
   try {
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
     const license = response.data;
-
-    console.log(`[${scriptId}] 📋 Licença:`, license ? 'ENCONTRADA' : 'NÃO ENCONTRADA');
 
     if (!license) {
       console.log(`[${scriptId}] ❌ Licença não encontrada`);
@@ -74,7 +61,7 @@ console.warn("[Anúncio Fantasma] ⏰ Licença expirada. Renove seu plano.");
       }
     }
 
-    // ==================== VALIDAR DOMÍNIO (CORRIGIDO) ====================
+    // ==================== VALIDAÇÃO DE DOMÍNIO (CORRIGIDA) ====================
     if (referer && license.domain) {
       let cleanReferer = referer.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
       let cleanDomain = license.domain.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
@@ -105,7 +92,6 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
 (function() {
     'use strict';
 
-    // ==================== CONFIGURAÇÕES ====================
     const STORAGE_KEY = 'user_spoofer_enabled';
     const VISITS_TO_RESET = 2;
     const LICENSE_ID = '${scriptId}';
@@ -117,7 +103,6 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
     console.log('🌐 Domínio:', DOMAIN);
     console.log('📊 Plano:', PLAN);
 
-    // ==================== ATIVAÇÃO VIA URL ====================
     try {
         const urlParams = new URLSearchParams(window.location.search);
         
@@ -141,17 +126,13 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
         console.error('❌ Erro ao processar URL:', e);
     }
 
-    // ==================== VERIFICAÇÃO ====================
     if (localStorage.getItem(STORAGE_KEY) !== 'true') {
         console.log('%c👻 Anúncio Fantasma: Ative com ?spoofer=on', 'color: #ffaa00; font-weight: bold;');
         return;
     }
 
-    // ==================== FUNÇÕES ====================
     function generateNewUserId() {
-        const timestamp = Date.now();
-        const random = Math.random().toString(36).substring(2, 15);
-        return 'device_' + timestamp + '_' + random;
+        return 'device_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
     }
 
     function clearTracking() {
@@ -181,7 +162,6 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
         } catch(e) {}
     }
 
-    // ==================== EXECUÇÃO PRINCIPAL ====================
     let visitCount = parseInt(localStorage.getItem('visit_counter') || '0');
     let currentUserId = localStorage.getItem('current_device_id');
 
@@ -191,7 +171,7 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
         currentUserId = generateNewUserId();
         visitCount = 1;
         clearTracking();
-        console.log('%c🔄 Dispositivo RESETADO! Novo ID: ' + currentUserId, 'color: #00ff88; font-weight: bold;');
+        console.log('%c🔄 Dispositivo RESETADO!', 'color: #00ff88; font-weight: bold;');
     }
 
     localStorage.setItem('visit_counter', visitCount);
@@ -204,7 +184,6 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
     console.log('%c👻 Visita ' + visitCount + '/' + VISITS_TO_RESET + ' | ID: ' + currentUserId, 
                 'color: #00ff88; font-weight: bold;');
 
-    // ==================== EXPORTA FUNÇÕES ====================
     window.AnuncioFantasma = {
         getDeviceId: () => currentUserId,
         isActive: () => localStorage.getItem(STORAGE_KEY) === 'true',
@@ -223,64 +202,10 @@ console.warn("[Anúncio Fantasma] 🚫 Domínio não autorizado. Registre seu do
     console.error(`[${scriptId}] 💥 ERRO:`, error.message);
     return res.status(200).send(`
 console.error("[Anúncio Fantasma] 💥 Erro interno. Contate o suporte.");
-console.error("${error.message}");
     `);
   }
 });
 
-// ==================== ENDPOINT DE TESTE ====================
-app.get('/test/:scriptId', async (req, res) => {
-  const scriptId = req.params.scriptId;
-  
-  try {
-    const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
-    const license = response.data;
-    
-    res.json({
-      id: scriptId,
-      found: !!license,
-      license: license,
-      firebaseUrl: `${FIREBASE_DB_URL}/licenses/${scriptId}.json`
-    });
-  } catch (error) {
-    res.json({
-      id: scriptId,
-      found: false,
-      error: error.message
-    });
-  }
-});
-
-// ==================== ENDPOINT DE STATUS ====================
-app.get('/status/:scriptId', async (req, res) => {
-  const scriptId = req.params.scriptId;
-  
-  try {
-    const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
-    const license = response.data;
-    
-    if (!license) {
-      return res.status(404).json({ error: 'Licença não encontrada' });
-    }
-
-    res.json({
-      id: scriptId,
-      domain: license.domain,
-      plan: license.planName,
-      active: license.active,
-      expiresAt: license.expiresAt || null,
-      isFree: license.planName === 'Grátis',
-      createdAt: license.createdAt
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao consultar status' });
-  }
-});
-
-// ==================== INICIAR SERVIDOR ====================
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor Anúncio Fantasma rodando na porta ${PORT}`);
-  console.log(`📡 Health: https://noti-ias-api00.onrender.com/`);
-  console.log(`📡 Script: https://noti-ias-api00.onrender.com/script/:id.js`);
-  console.log(`📡 Teste: https://noti-ias-api00.onrender.com/test/:id`);
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
