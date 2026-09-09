@@ -1,4 +1,4 @@
-// ==================== BACKEND COMPLETO COM REMOÇÃO DE COOKIES ====================
+// ==================== BACKEND COMPLETO COM PERSISTÊNCIA ====================
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -142,6 +142,35 @@ function sendScript(res, scriptId, license, referer) {
     const DOMAIN = '${license.domain || 'Desconhecido'}';
     const PLAN = '${license.planName || 'Grátis'}';
 
+    // ==================== STORAGE PERSISTENTE (COOKIE + LOCALSTORAGE) ====================
+    function getPersistent(key) {
+        // Tenta localStorage primeiro
+        let value = localStorage.getItem(key);
+        if (value) return value;
+        
+        // Depois tenta cookie
+        const cookie = document.cookie.split('; ').find(row => row.startsWith(key + '='));
+        if (cookie) {
+            value = decodeURIComponent(cookie.split('=')[1]);
+            localStorage.setItem(key, value); // Restaura no localStorage
+            return value;
+        }
+        
+        return null;
+    }
+
+    function setPersistent(key, value) {
+        try {
+            localStorage.setItem(key, value);
+            document.cookie = key + '=' + encodeURIComponent(value) + ';path=/;max-age=31536000'; // 1 ano
+        } catch(e) {}
+    }
+
+    function deletePersistent(key) {
+        localStorage.removeItem(key);
+        document.cookie = key + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+    }
+
     // ==================== REMOVER AVISO DE COOKIES AUTOMATICAMENTE ====================
     function removerAvisoCookies() {
         try {
@@ -227,13 +256,13 @@ function sendScript(res, scriptId, license, referer) {
         const urlParams = new URLSearchParams(window.location.search);
         
         if (urlParams.get('spoofer') === 'on') {
-            localStorage.setItem(STORAGE_KEY, 'true');
+            setPersistent(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
             console.log('%c👻 ANÚNCIO FANTASMA ATIVADO!', 'color: #00ff88; font-weight: bold; font-size: 16px;');
             alert('✅ Anúncio Fantasma ATIVADO neste dispositivo!');
         } 
         else if (urlParams.get('spoofer') === 'off') {
-            localStorage.removeItem(STORAGE_KEY);
+            deletePersistent(STORAGE_KEY);
             window.history.replaceState({}, document.title, window.location.pathname);
             console.log('%c👻 ANÚNCIO FANTASMA DESATIVADO!', 'color: #ff4444; font-weight: bold; font-size: 16px;');
             alert('❌ Anúncio Fantasma DESATIVADO neste dispositivo!');
@@ -243,8 +272,9 @@ function sendScript(res, scriptId, license, referer) {
         console.error('❌ Erro ao processar URL:', e);
     }
 
-    // ==================== VERIFICAÇÃO ====================
-    if (localStorage.getItem(STORAGE_KEY) !== 'true') {
+    // ==================== VERIFICAÇÃO PERSISTENTE ====================
+    // 🔥 MESMO DEPOIS DE LIMPAR OS DADOS, O COOKIE RECUPERA A ATIVAÇÃO
+    if (getPersistent(STORAGE_KEY) !== 'true') {
         console.log('%c👻 Anúncio Fantasma: Ative com ?spoofer=on', 'color: #ffaa00; font-weight: bold;');
         return;
     }
@@ -262,10 +292,10 @@ function sendScript(res, scriptId, license, referer) {
                     document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
                 }
             });
-            const isActive = localStorage.getItem(STORAGE_KEY);
+            const isActive = getPersistent(STORAGE_KEY);
             localStorage.clear();
             sessionStorage.clear();
-            if (isActive === 'true') localStorage.setItem(STORAGE_KEY, 'true');
+            if (isActive === 'true') setPersistent(STORAGE_KEY, 'true');
         } catch(e) {}
     }
 
@@ -296,7 +326,7 @@ function sendScript(res, scriptId, license, referer) {
 
     localStorage.setItem('visit_counter', visitCount);
     localStorage.setItem('current_device_id', currentUserId);
-    localStorage.setItem(STORAGE_KEY, 'true');
+    setPersistent(STORAGE_KEY, 'true');
 
     window.currentFakeUserId = currentUserId;
     spoofFingerprint();
@@ -306,7 +336,7 @@ function sendScript(res, scriptId, license, referer) {
 
     window.AnuncioFantasma = {
         getDeviceId: () => currentUserId,
-        isActive: () => localStorage.getItem(STORAGE_KEY) === 'true',
+        isActive: () => getPersistent(STORAGE_KEY) === 'true',
         getVisitCount: () => visitCount,
         licenseId: LICENSE_ID,
         domain: DOMAIN,
