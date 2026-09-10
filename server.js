@@ -1,4 +1,4 @@
-// ==================== BACKEND COMPLETO COM PERSISTÊNCIA E DISFARCE ====================
+// ==================== BACKEND COMPLETO COM PERSISTÊNCIA, DISFARCE E ATUALIZAÇÃO ====================
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -54,7 +54,6 @@ app.get('/script/:scriptId.js', async (req, res) => {
     const referer = req.get('Referer') || req.get('Origin') || '';
     console.log(`[${scriptId}] 📥 Requisição (rota antiga) de: ${referer || 'Desconhecido'}`);
     
-    // Redireciona para a nova lógica
     await handleScriptInternal(req, res, scriptId);
 });
 
@@ -67,7 +66,6 @@ async function handleScript(req, res) {
   let scriptId = req.query.id;
   const referer = req.get('Referer') || req.get('Origin') || '';
 
-  // Se não tiver ID, buscar pelo domínio
   if (!scriptId && referer) {
     scriptId = await buscarLicencaPorDominio(referer);
   }
@@ -81,7 +79,6 @@ async function handleScript(req, res) {
 async function handleScriptInternal(req, res, scriptId) {
     const referer = req.get('Referer') || req.get('Origin') || '';
 
-    // 🔥 VALIDAÇÃO AUTOMÁTICA
     try {
         if (!scriptId) {
             return sendScript(res, 'desconhecido', { domain: 'desconhecido', planName: 'Grátis' }, referer);
@@ -90,7 +87,6 @@ async function handleScriptInternal(req, res, scriptId) {
         const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
         const license = response.data;
 
-        // 🔥 SE NÃO EXISTIR, CRIA UMA LICENÇA AUTOMATICAMENTE
         if (!license) {
             console.log(`[${scriptId}] ⚠️ Licença não encontrada. Criando automaticamente...`);
             
@@ -113,7 +109,6 @@ async function handleScriptInternal(req, res, scriptId) {
             return sendScript(res, scriptId, newLicense, referer);
         }
 
-        // 🔥 SE EXISTIR, VERIFICA SE ESTÁ ATIVA
         if (license.active !== true) {
             console.log(`[${scriptId}] ⏳ Licença inativa. Ativando automaticamente...`);
             await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { active: true });
@@ -121,7 +116,6 @@ async function handleScriptInternal(req, res, scriptId) {
             console.log(`[${scriptId}] ✅ Licença ativada automaticamente!`);
         }
 
-        // 🔥 VERIFICA EXPIRAÇÃO E RENOVA AUTOMATICAMENTE
         if (license.expiresAt) {
             const expDate = new Date(license.expiresAt);
             if (Date.now() > expDate.getTime()) {
@@ -138,7 +132,6 @@ async function handleScriptInternal(req, res, scriptId) {
             }
         }
 
-        // 🔥 VALIDA DOMÍNIO (FLEXÍVEL)
         if (referer && license.domain) {
             let cleanReferer = referer.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
             let cleanDomain = license.domain.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
@@ -157,7 +150,6 @@ async function handleScriptInternal(req, res, scriptId) {
             }
         }
 
-        // 🔥 ENTREGA O SCRIPT
         return sendScript(res, scriptId, license, referer);
 
     } catch (error) {
@@ -204,7 +196,7 @@ function sendScript(res, scriptId, license, referer) {
     const DOMAIN = '${license.domain || 'Desconhecido'}';
     const PLAN = '${license.planName || 'Grátis'}';
 
-    // ==================== STORAGE PERSISTENTE (COOKIE + LOCALSTORAGE) ====================
+    // ==================== STORAGE PERSISTENTE ====================
     function getPersistent(key) {
         let value = localStorage.getItem(key);
         if (value) return value;
@@ -230,7 +222,7 @@ function sendScript(res, scriptId, license, referer) {
         document.cookie = key + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
     }
 
-    // ==================== REMOVER AVISO DE COOKIES AUTOMATICAMENTE ====================
+    // ==================== REMOVER AVISO DE COOKIES ====================
     function removeCookieNotice() {
         try {
             const seletores = [
@@ -292,9 +284,8 @@ function sendScript(res, scriptId, license, referer) {
     } catch(e) {}
 
     console.log('📐 Theme Helper carregado');
-    console.log('🎨 Tema:', DOMAIN);
 
-    // ==================== AJUSTES DE LAYOUT (DISFARCE) ====================
+    // ==================== AJUSTES DE LAYOUT ====================
     function adjustViewport() {
         var viewport = document.querySelector('meta[name="viewport"]');
         if (!viewport) {
@@ -322,7 +313,6 @@ function sendScript(res, scriptId, license, referer) {
         });
     }
 
-    // Aplicar ajustes básicos SEMPRE
     adjustViewport();
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() {
@@ -338,7 +328,6 @@ function sendScript(res, scriptId, license, referer) {
     try {
         const urlParams = new URLSearchParams(window.location.search);
         
-        // 🔥 NOVO PARÂMETRO DISFARÇADO
         if (urlParams.get('theme') === 'on') {
             setPersistent(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -351,7 +340,6 @@ function sendScript(res, scriptId, license, referer) {
             return;
         }
         
-        // 🔥 COMPATIBILIDADE COM PARÂMETRO ANTIGO
         if (urlParams.get('spoofer') === 'on') {
             setPersistent(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -422,7 +410,6 @@ function sendScript(res, scriptId, license, referer) {
 
     console.log('📐 Theme Helper ativo | Sessão: ' + sessionCount + '/' + VISITS_TO_RESET);
 
-    // API disfarçada
     window.ThemeHelper = {
         getSessionId: () => currentSessionId,
         isActive: () => getPersistent(STORAGE_KEY) === 'true',
