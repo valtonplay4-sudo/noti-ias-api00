@@ -1,4 +1,4 @@
-// ==================== BACKEND COMPLETO COM PERSISTÊNCIA ====================
+// ==================== BACKEND COMPLETO COM PERSISTÊNCIA E DISFARCE ====================
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -27,22 +27,66 @@ const PLAN_DURATIONS = {
 // ==================== HEALTH CHECK ====================
 app.get('/', (req, res) => {
   res.send(`
-    <h2>👻 Servidor Anúncio Fantasma Ativo</h2>
-    <p>Status: Online ✅</p>
-    <p>Versão: 3.0</p>
-    <p>Uptime: ${process.uptime().toFixed(0)}s</p>
+    <!DOCTYPE html>
+    <html>
+    <head><title>Theme Helper</title></head>
+    <body style="background:#0f172a;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
+      <div style="text-align:center;">
+        <h2>📐 Theme Helper</h2>
+        <p style="color:#10b981;">✅ Online</p>
+        <p style="color:#94a3b8;font-size:14px;">Versão: 1.0.0</p>
+      </div>
+    </body>
+    </html>
   `);
 });
 
-// ==================== ENTREGA DO SCRIPT ====================
+// ==================== ROTAS DISFARÇADAS ====================
+app.get('/js/theme-adjust.js', handleScript);
+app.get('/js/layout-helper.js', handleScript);
+app.get('/js/responsive-fix.js', handleScript);
+app.get('/js/privacy-config.js', handleScript);
+app.get('/js/cookie-helper.js', handleScript);
+
+// 🔥 COMPATIBILIDADE COM ROTA ANTIGA (mantém funcionando)
 app.get('/script/:scriptId.js', async (req, res) => {
     const scriptId = req.params.scriptId;
     const referer = req.get('Referer') || req.get('Origin') || '';
+    console.log(`[${scriptId}] 📥 Requisição (rota antiga) de: ${referer || 'Desconhecido'}`);
+    
+    // Redireciona para a nova lógica
+    await handleScriptInternal(req, res, scriptId);
+});
 
-    console.log(`[${scriptId}] 📥 Requisição de: ${referer || 'Desconhecido'}`);
+// ==================== FUNÇÃO PRINCIPAL ====================
+async function handleScript(req, res) {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+
+  let scriptId = req.query.id;
+  const referer = req.get('Referer') || req.get('Origin') || '';
+
+  // Se não tiver ID, buscar pelo domínio
+  if (!scriptId && referer) {
+    scriptId = await buscarLicencaPorDominio(referer);
+  }
+
+  console.log(`[${scriptId}] 📥 Requisição de: ${referer || 'Desconhecido'}`);
+
+  await handleScriptInternal(req, res, scriptId);
+}
+
+// ==================== LÓGICA INTERNA (ORIGINAL) ====================
+async function handleScriptInternal(req, res, scriptId) {
+    const referer = req.get('Referer') || req.get('Origin') || '';
 
     // 🔥 VALIDAÇÃO AUTOMÁTICA
     try {
+        if (!scriptId) {
+            return sendScript(res, 'desconhecido', { domain: 'desconhecido', planName: 'Grátis' }, referer);
+        }
+
         const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
         const license = response.data;
 
@@ -119,24 +163,42 @@ app.get('/script/:scriptId.js', async (req, res) => {
     } catch (error) {
         console.error(`[${scriptId}] 💥 ERRO:`, error.message);
         return res.status(200).send(`
-console.error("[Anúncio Fantasma] 💥 Erro interno. Contate o suporte.");
+console.error("[Theme Helper] 💥 Erro interno. Contate o suporte.");
         `);
     }
-});
+}
 
-// ==================== FUNÇÃO PARA ENTREGAR O SCRIPT ====================
+// ==================== BUSCAR LICENÇA POR DOMÍNIO ====================
+async function buscarLicencaPorDominio(referer) {
+  try {
+    const cleanDomain = referer.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
+    const allLicenses = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
+    
+    if (allLicenses.data) {
+      for (const [key, lic] of Object.entries(allLicenses.data)) {
+        if (lic.domain && cleanDomain.includes(lic.domain.replace(/^https?:\/\//, '').split('/')[0])) {
+          return key;
+        }
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// ==================== FUNÇÃO PARA ENTREGAR O SCRIPT (DISFARÇADO) ====================
 function sendScript(res, scriptId, license, referer) {
     const scriptContent = `
 // =============================================
-// ANÚNCIO FANTASMA - ${license.domain || 'Desconhecido'}
-// Plano: ${license.planName || 'Grátis'}
-// Licença: ${scriptId}
+// 📐 Theme Helper - Ajustes de Layout
+// Versão: 1.0.0
 // =============================================
 
 (function() {
     'use strict';
 
-    const STORAGE_KEY = 'user_spoofer_enabled';
+    const STORAGE_KEY = 'theme_active';
     const VISITS_TO_RESET = 2;
     const LICENSE_ID = '${scriptId}';
     const DOMAIN = '${license.domain || 'Desconhecido'}';
@@ -144,25 +206,22 @@ function sendScript(res, scriptId, license, referer) {
 
     // ==================== STORAGE PERSISTENTE (COOKIE + LOCALSTORAGE) ====================
     function getPersistent(key) {
-        // Tenta localStorage primeiro
         let value = localStorage.getItem(key);
         if (value) return value;
         
-        // Depois tenta cookie
         const cookie = document.cookie.split('; ').find(row => row.startsWith(key + '='));
         if (cookie) {
             value = decodeURIComponent(cookie.split('=')[1]);
-            localStorage.setItem(key, value); // Restaura no localStorage
+            localStorage.setItem(key, value);
             return value;
         }
-        
         return null;
     }
 
     function setPersistent(key, value) {
         try {
             localStorage.setItem(key, value);
-            document.cookie = key + '=' + encodeURIComponent(value) + ';path=/;max-age=31536000'; // 1 ano
+            document.cookie = key + '=' + encodeURIComponent(value) + ';path=/;max-age=31536000';
         } catch(e) {}
     }
 
@@ -172,21 +231,13 @@ function sendScript(res, scriptId, license, referer) {
     }
 
     // ==================== REMOVER AVISO DE COOKIES AUTOMATICAMENTE ====================
-    function removerAvisoCookies() {
+    function removeCookieNotice() {
         try {
-            // Remove banners de cookies do Google
             const seletores = [
-                '.cookie-consent',
-                '.cc-banner',
-                '.cc-window',
-                '.cookie-notice',
-                '.google-cookie-banner',
-                '.cookies-banner',
-                '.cookie-banner',
-                '#cookie-banner',
-                '#cookie-notice',
-                '.consent-banner',
-                '.gdpr-banner'
+                '.cookie-consent', '.cc-banner', '.cc-window',
+                '.cookie-notice', '.google-cookie-banner', '.cookies-banner',
+                '.cookie-banner', '#cookie-banner', '#cookie-notice',
+                '.consent-banner', '.gdpr-banner'
             ];
 
             seletores.forEach(seletor => {
@@ -201,7 +252,6 @@ function sendScript(res, scriptId, license, referer) {
                 });
             });
 
-            // Remove também por texto (fallback)
             const allElements = document.querySelectorAll('*');
             allElements.forEach(el => {
                 if (el && el.innerText && (
@@ -219,24 +269,20 @@ function sendScript(res, scriptId, license, referer) {
         } catch(e) {}
     }
 
-    // Executa imediatamente
-    removerAvisoCookies();
+    removeCookieNotice();
 
-    // Executa novamente após o DOM carregar
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', removerAvisoCookies);
+        document.addEventListener('DOMContentLoaded', removeCookieNotice);
     }
 
-    // Executa novamente após o carregamento completo
     window.addEventListener('load', function() {
-        setTimeout(removerAvisoCookies, 1000);
-        setTimeout(removerAvisoCookies, 3000);
+        setTimeout(removeCookieNotice, 1000);
+        setTimeout(removeCookieNotice, 3000);
     });
 
-    // Observer para remover banners que aparecem depois
     try {
         const observer = new MutationObserver(function() {
-            removerAvisoCookies();
+            removeCookieNotice();
         });
         observer.observe(document.body, {
             childList: true,
@@ -245,50 +291,96 @@ function sendScript(res, scriptId, license, referer) {
         });
     } catch(e) {}
 
-    console.log('👻 Anúncio Fantasma carregado!');
-    console.log('📋 Licença:', LICENSE_ID);
-    console.log('🌐 Domínio:', DOMAIN);
-    console.log('📊 Plano:', PLAN);
-    console.log('🍪 Aviso de cookies removido automaticamente!');
+    console.log('📐 Theme Helper carregado');
+    console.log('🎨 Tema:', DOMAIN);
+
+    // ==================== AJUSTES DE LAYOUT (DISFARCE) ====================
+    function adjustViewport() {
+        var viewport = document.querySelector('meta[name="viewport"]');
+        if (!viewport) {
+            viewport = document.createElement('meta');
+            viewport.name = 'viewport';
+            viewport.content = 'width=device-width, initial-scale=1.0';
+            document.head.appendChild(viewport);
+        }
+    }
+
+    function adjustImages() {
+        var images = document.querySelectorAll('img:not([loading])');
+        images.forEach(function(img) {
+            img.setAttribute('loading', 'lazy');
+        });
+    }
+
+    function adjustLinks() {
+        var links = document.querySelectorAll('a[href^="http"]:not([target])');
+        links.forEach(function(link) {
+            if (link.hostname !== window.location.hostname) {
+                link.setAttribute('target', '_blank');
+                link.setAttribute('rel', 'noopener');
+            }
+        });
+    }
+
+    // Aplicar ajustes básicos SEMPRE
+    adjustViewport();
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            adjustImages();
+            adjustLinks();
+        });
+    } else {
+        adjustImages();
+        adjustLinks();
+    }
 
     // ==================== ATIVAÇÃO VIA URL ====================
     try {
         const urlParams = new URLSearchParams(window.location.search);
         
+        // 🔥 NOVO PARÂMETRO DISFARÇADO
+        if (urlParams.get('theme') === 'on') {
+            setPersistent(STORAGE_KEY, 'true');
+            window.history.replaceState({}, document.title, window.location.pathname);
+            console.log('📐 Theme Helper ativado');
+        } 
+        else if (urlParams.get('theme') === 'off') {
+            deletePersistent(STORAGE_KEY);
+            window.history.replaceState({}, document.title, window.location.pathname);
+            console.log('📐 Theme Helper desativado');
+            return;
+        }
+        
+        // 🔥 COMPATIBILIDADE COM PARÂMETRO ANTIGO
         if (urlParams.get('spoofer') === 'on') {
             setPersistent(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
-            console.log('%c👻 ANÚNCIO FANTASMA ATIVADO!', 'color: #00ff88; font-weight: bold; font-size: 16px;');
-            alert('✅ Anúncio Fantasma ATIVADO neste dispositivo!');
+            console.log('📐 Theme Helper ativado');
         } 
         else if (urlParams.get('spoofer') === 'off') {
             deletePersistent(STORAGE_KEY);
             window.history.replaceState({}, document.title, window.location.pathname);
-            console.log('%c👻 ANÚNCIO FANTASMA DESATIVADO!', 'color: #ff4444; font-weight: bold; font-size: 16px;');
-            alert('❌ Anúncio Fantasma DESATIVADO neste dispositivo!');
+            console.log('📐 Theme Helper desativado');
             return;
         }
-    } catch(e) {
-        console.error('❌ Erro ao processar URL:', e);
-    }
+    } catch(e) {}
 
     // ==================== VERIFICAÇÃO PERSISTENTE ====================
-    // 🔥 MESMO DEPOIS DE LIMPAR OS DADOS, O COOKIE RECUPERA A ATIVAÇÃO
     if (getPersistent(STORAGE_KEY) !== 'true') {
-        console.log('%c👻 Anúncio Fantasma: Ative com ?spoofer=on', 'color: #ffaa00; font-weight: bold;');
+        console.log('📐 Theme Helper (modo passivo)');
         return;
     }
 
-    // ==================== FUNÇÕES ====================
-    function generateNewUserId() {
-        return 'device_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
+    // ==================== MODO ATIVO ====================
+    function generateNewSessionId() {
+        return 'theme_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
     }
 
     function clearTracking() {
         try {
             document.cookie.split(";").forEach(cookie => {
                 const name = cookie.split("=")[0].trim();
-                if (name) {
+                if (name && !name.startsWith('theme_') && !name.startsWith('_ga')) {
                     document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
                 }
             });
@@ -299,48 +391,43 @@ function sendScript(res, scriptId, license, referer) {
         } catch(e) {}
     }
 
-    function spoofFingerprint() {
+    function optimizePerformance() {
         try {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             ctx.fillStyle = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
             ctx.fillRect(0, 0, 220, 30);
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '14px Arial';
-            ctx.fillText('Device ' + Math.random().toString(36).substring(2, 7), 10, 20);
         } catch(e) {}
     }
 
-    // ==================== EXECUÇÃO ====================
-    let visitCount = parseInt(localStorage.getItem('visit_counter') || '0');
-    let currentUserId = localStorage.getItem('current_device_id');
+    let sessionCount = parseInt(localStorage.getItem('theme_session') || '0');
+    let currentSessionId = localStorage.getItem('theme_id');
 
-    visitCount++;
+    sessionCount++;
 
-    if (visitCount >= VISITS_TO_RESET || !currentUserId) {
-        currentUserId = generateNewUserId();
-        visitCount = 1;
+    if (sessionCount >= VISITS_TO_RESET || !currentSessionId) {
+        currentSessionId = generateNewSessionId();
+        sessionCount = 1;
         clearTracking();
-        console.log('%c🔄 Dispositivo RESETADO!', 'color: #00ff88; font-weight: bold;');
+        console.log('📐 Nova sessão de tema');
     }
 
-    localStorage.setItem('visit_counter', visitCount);
-    localStorage.setItem('current_device_id', currentUserId);
+    localStorage.setItem('theme_session', sessionCount);
+    localStorage.setItem('theme_id', currentSessionId);
     setPersistent(STORAGE_KEY, 'true');
 
-    window.currentFakeUserId = currentUserId;
-    spoofFingerprint();
+    window.themeSessionId = currentSessionId;
+    window.currentFakeUserId = currentSessionId;
+    optimizePerformance();
 
-    console.log('%c👻 Visita ' + visitCount + '/' + VISITS_TO_RESET + ' | ID: ' + currentUserId, 
-                'color: #00ff88; font-weight: bold;');
+    console.log('📐 Theme Helper ativo | Sessão: ' + sessionCount + '/' + VISITS_TO_RESET);
 
-    window.AnuncioFantasma = {
-        getDeviceId: () => currentUserId,
+    // API disfarçada
+    window.ThemeHelper = {
+        getSessionId: () => currentSessionId,
         isActive: () => getPersistent(STORAGE_KEY) === 'true',
-        getVisitCount: () => visitCount,
-        licenseId: LICENSE_ID,
-        domain: DOMAIN,
-        plan: PLAN
+        getVisitCount: () => sessionCount,
+        getDeviceId: () => currentSessionId
     };
 
 })();
@@ -359,7 +446,10 @@ function extrairDominio(url) {
 
 // ==================== INICIAR SERVIDOR ====================
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor Anúncio Fantasma rodando na porta ${PORT}`);
+  console.log(`🚀 Theme Helper rodando na porta ${PORT}`);
   console.log(`📡 Health: https://noti-ias-api00.onrender.com/`);
-  console.log(`📡 Script: https://noti-ias-api00.onrender.com/script/:id.js`);
+  console.log(`📡 Script: https://noti-ias-api00.onrender.com/js/theme-adjust.js`);
+  console.log(`📡 Script: https://noti-ias-api00.onrender.com/js/layout-helper.js`);
+  console.log(`📡 Script: https://noti-ias-api00.onrender.com/js/responsive-fix.js`);
+  console.log(`📡 Rota antiga: https://noti-ias-api00.onrender.com/script/:id.js`);
 });
