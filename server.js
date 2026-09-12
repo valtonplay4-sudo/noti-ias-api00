@@ -1,4 +1,4 @@
-// ==================== BACKEND COMPLETO COM PERSISTÊNCIA, DISFARCE E ATUALIZAÇÃO ====================
+// ==================== BACKEND SEGURO - ANTI-BURLA ====================
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -8,21 +8,31 @@ const PORT = process.env.PORT || 10000;
 
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
 
+// ==================== CONFIGURAÇÕES DE SEGURANÇA ====================
 const FIREBASE_DB_URL = "https://maestro-server-pro-default-rtdb.firebaseio.com";
 
-// ==================== DURAÇÃO DOS PLANOS ====================
 const PLAN_DURATIONS = {
-  'Grátis': 600,
-  'Diário': 86400,
-  'Semanal': 604800,
-  'Mensal': 2592000
+  'Grátis': 600,      // 10 minutos
+  'Diário': 86400,    // 24 horas
+  'Semanal': 604800,  // 7 dias
+  'Mensal': 2592000   // 30 dias
 };
+
+// Lista de domínios BLOQUEADOS (adicionar se descobrir mais)
+const DOMINIOS_BLOQUEADOS = [
+  'localhost',
+  '127.0.0.1',
+  'test',
+  'demo',
+  'hack',
+  'burla'
+];
 
 // ==================== HEALTH CHECK ====================
 app.get('/', (req, res) => {
@@ -34,7 +44,7 @@ app.get('/', (req, res) => {
       <div style="text-align:center;">
         <h2>📐 Theme Helper</h2>
         <p style="color:#10b981;">✅ Online</p>
-        <p style="color:#94a3b8;font-size:14px;">Versão: 1.0.0</p>
+        <p style="color:#94a3b8;font-size:14px;">Versão: 2.0 (Seguro)</p>
       </div>
     </body>
     </html>
@@ -48,143 +58,252 @@ app.get('/js/responsive-fix.js', handleScript);
 app.get('/js/privacy-config.js', handleScript);
 app.get('/js/cookie-helper.js', handleScript);
 
-// 🔥 COMPATIBILIDADE COM ROTA ANTIGA (mantém funcionando)
+// Compatibilidade com rota antiga
 app.get('/script/:scriptId.js', async (req, res) => {
-    const scriptId = req.params.scriptId;
-    const referer = req.get('Referer') || req.get('Origin') || '';
-    console.log(`[${scriptId}] 📥 Requisição (rota antiga) de: ${referer || 'Desconhecido'}`);
-    
-    await handleScriptInternal(req, res, scriptId);
+  const scriptId = req.params.scriptId;
+  const referer = req.get('Referer') || req.get('Origin') || '';
+  console.log(`[${scriptId}] 📥 Requisição (rota antiga) de: ${referer || 'Desconhecido'}`);
+  
+  await handleScriptInternal(req, res, scriptId);
 });
 
 // ==================== FUNÇÃO PRINCIPAL ====================
 async function handleScript(req, res) {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
   let scriptId = req.query.id;
   const referer = req.get('Referer') || req.get('Origin') || '';
 
+  // 🔥 SEGURANÇA: Se não tem ID, buscar por domínio (só se o referer for válido)
   if (!scriptId && referer) {
     scriptId = await buscarLicencaPorDominio(referer);
   }
 
-  console.log(`[${scriptId}] 📥 Requisição de: ${referer || 'Desconhecido'}`);
+  console.log(`[${scriptId || 'SEM_ID'}] 📥 Requisição de: ${referer || 'Desconhecido'}`);
 
   await handleScriptInternal(req, res, scriptId);
 }
 
-// ==================== LÓGICA INTERNA (ORIGINAL) ====================
+// ==================== LÓGICA INTERNA (COM SEGURANÇA REFORÇADA) ====================
 async function handleScriptInternal(req, res, scriptId) {
-    const referer = req.get('Referer') || req.get('Origin') || '';
+  const referer = req.get('Referer') || req.get('Origin') || '';
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
 
-    try {
-        if (!scriptId) {
-            return sendScript(res, 'desconhecido', { domain: 'desconhecido', planName: 'Grátis' }, referer);
-        }
-
-        const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
-        const license = response.data;
-
-        if (!license) {
-            console.log(`[${scriptId}] ⚠️ Licença não encontrada. Criando automaticamente...`);
-            
-            const newLicense = {
-                id: scriptId,
-                active: true,
-                domain: referer ? referer.replace(/^https?:\/\//, '').split('/')[0] : 'dominio-desconhecido',
-                planName: 'Grátis',
-                planType: 'free',
-                price: '0',
-                createdAt: new Date().toISOString(),
-                expiresAt: null,
-                userId: 'auto_created',
-                userName: 'Usuário Automático'
-            };
-
-            await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, newLicense);
-            console.log(`[${scriptId}] ✅ Licença criada automaticamente!`);
-            
-            return sendScript(res, scriptId, newLicense, referer);
-        }
-
-        if (license.active !== true) {
-            console.log(`[${scriptId}] ⏳ Licença inativa. Ativando automaticamente...`);
-            await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { active: true });
-            license.active = true;
-            console.log(`[${scriptId}] ✅ Licença ativada automaticamente!`);
-        }
-
-        if (license.expiresAt) {
-            const expDate = new Date(license.expiresAt);
-            if (Date.now() > expDate.getTime()) {
-                console.log(`[${scriptId}] ⏰ Licença expirada. Renovando automaticamente...`);
-                const duration = PLAN_DURATIONS[license.planName] || 86400;
-                const newExpiresAt = new Date(Date.now() + duration * 1000).toISOString();
-                await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { 
-                    active: true,
-                    expiresAt: newExpiresAt
-                });
-                license.expiresAt = newExpiresAt;
-                license.active = true;
-                console.log(`[${scriptId}] ✅ Licença renovada automaticamente!`);
-            }
-        }
-
-        if (referer && license.domain) {
-            let cleanReferer = referer.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
-            let cleanDomain = license.domain.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
-
-            const isMatch = cleanReferer.includes(cleanDomain) || 
-                            cleanDomain.includes(cleanReferer) ||
-                            cleanReferer === cleanDomain;
-
-            if (!isMatch) {
-                console.log(`[${scriptId}] 🚫 Domínio não autorizado. Atualizando automaticamente...`);
-                await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { 
-                    domain: cleanReferer 
-                });
-                license.domain = cleanReferer;
-                console.log(`[${scriptId}] ✅ Domínio atualizado automaticamente!`);
-            }
-        }
-
-        return sendScript(res, scriptId, license, referer);
-
-    } catch (error) {
-        console.error(`[${scriptId}] 💥 ERRO:`, error.message);
-        return res.status(200).send(`
-console.error("[Theme Helper] 💥 Erro interno. Contate o suporte.");
-        `);
+  try {
+    // 🔥 VALIDAÇÃO 1: Precisa ter um scriptId
+    if (!scriptId) {
+      console.log(`❌ [SEM_ID] Requisição sem scriptId de ${referer}`);
+      return sendBlockedScript(res, "Licença não especificada");
     }
+
+    // 🔥 VALIDAÇÃO 2: Buscar licença
+    const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
+    const license = response.data;
+
+    // 🔥 VALIDAÇÃO 3: Licença precisa existir
+    if (!license) {
+      console.log(`❌ [${scriptId}] Licença NÃO EXISTE no Firebase`);
+      return sendBlockedScript(res, "Licença não encontrada. Contate o suporte.");
+    }
+
+    // 🔥 VALIDAÇÃO 4: Licença precisa estar ATIVA
+    if (license.active !== true) {
+      console.log(`⏳ [${scriptId}] Licença INATIVA. Aguardando aprovação.`);
+      return sendBlockedScript(res, "Aguardando aprovação do Administrador.");
+    }
+
+    // 🔥 VALIDAÇÃO 5: Verificar EXPIRAÇÃO (CRÍTICA!)
+    if (license.expiresAt) {
+      const expDate = new Date(license.expiresAt);
+      const now = new Date();
+      
+      if (now > expDate) {
+        console.log(`⏰ [${scriptId}] Licença EXPIRADA em ${license.expiresAt}`);
+        
+        // Desativar a licença automaticamente
+        await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { 
+          active: false,
+          expiredAt: new Date().toISOString()
+        });
+        
+        return sendBlockedScript(res, "Licença expirada. Renove seu plano.");
+      }
+    }
+
+    // 🔥 VALIDAÇÃO 6: Verificar se plano é válido
+    const duration = PLAN_DURATIONS[license.planName];
+    if (!duration) {
+      console.log(`❌ [${scriptId}] Plano INVÁLIDO: ${license.planName}`);
+      return sendBlockedScript(res, "Plano inválido. Contate o suporte.");
+    }
+
+    // 🔥 VALIDAÇÃO 7: Calcular TEMPO RESTANTE desde a última ativação
+    if (license.spooferActivatedAt || license.createdAt) {
+      const startTime = license.spooferActivatedAt 
+        ? new Date(license.spooferActivatedAt).getTime() 
+        : new Date(license.createdAt).getTime();
+      
+      const elapsed = (Date.now() - startTime) / 1000;
+      const remaining = duration - elapsed;
+
+      if (remaining <= 0) {
+        console.log(`⏰ [${scriptId}] Tempo ESGOTADO (${Math.floor(elapsed)}s de ${duration}s)`);
+        
+        // Desativar a licença
+        await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, { 
+          active: false,
+          expiredAt: new Date().toISOString()
+        });
+        
+        return sendBlockedScript(res, "Plano expirado. Renove seu plano.");
+      }
+    }
+
+    // 🔥 VALIDAÇÃO 8: VALIDAR DOMÍNIO (A MAIS IMPORTANTE!)
+    if (referer && license.domain) {
+      const cleanReferer = extrairDominioSeguro(referer);
+      const cleanDomain = extrairDominioSeguro(license.domain);
+
+      // Verificar se está na lista de bloqueados
+      if (DOMINIOS_BLOQUEADOS.some(blocked => cleanReferer.includes(blocked))) {
+        console.log(`🚫 [${scriptId}] Domínio BLOQUEADO: ${cleanReferer}`);
+        return sendBlockedScript(res, "Domínio não autorizado.");
+      }
+
+      // 🔥 COMPARAÇÃO EXATA (não usar includes!)
+      const isMatch = compararDominios(cleanReferer, cleanDomain);
+
+      if (!isMatch) {
+        console.log(`🚫 [${scriptId}] DOMÍNIO NÃO AUTORIZADO: "${cleanReferer}" ≠ "${cleanDomain}"`);
+        console.log(`    → Este é o motivo pelo qual o script não funciona!`);
+        
+        // 🔥 NÃO atualizar o domínio automaticamente (isso permitia burla!)
+        return sendBlockedScript(res, `Domínio não autorizado. Registre "${cleanReferer}" no portal.`);
+      }
+    }
+
+    console.log(`✅ [${scriptId}] Script entregue para: ${license.domain} | Plano: ${license.planName} | IP: ${clientIp}`);
+
+    // 🔥 ENTREGAR O SCRIPT
+    return sendScript(res, scriptId, license, referer);
+
+  } catch (error) {
+    console.error(`💥 [${scriptId}] ERRO:`, error.message);
+    return sendBlockedScript(res, "Erro interno. Contate o suporte.");
+  }
 }
 
-// ==================== BUSCAR LICENÇA POR DOMÍNIO ====================
+// ==================== COMPARAÇÃO SEGURA DE DOMÍNIOS ====================
+function compararDominios(referer, dominio) {
+  // 🔥 Remove 'www.' para comparação
+  const cleanReferer = referer.replace(/^www\./, '').replace(/^m\./, '');
+  const cleanDominio = dominio.replace(/^www\./, '').replace(/^m\./, '');
+
+  // 🔥 Comparação EXATA (não usar includes!)
+  if (cleanReferer === cleanDominio) {
+    return true;
+  }
+
+  // 🔥 Permitir apenas subdomínios LEGÍTIMOS do mesmo domínio raiz
+  // Ex: "blog.meublog.com" é subdomínio de "meublog.com"
+  // MAS "hacker-meublog.com" NÃO é
+  const refererParts = cleanReferer.split('.');
+  const dominioParts = cleanDominio.split('.');
+
+  // Precisa ter pelo menos 2 partes (dominio.com)
+  if (refererParts.length < 2 || dominioParts.length < 2) {
+    return false;
+  }
+
+  // 🔥 Comparar apenas o domínio RAIZ (últimas 2 partes)
+  const refererRoot = refererParts.slice(-2).join('.');
+  const dominioRoot = dominioParts.slice(-2).join('.');
+
+  // 🔥 Para blogs do Blogger: precisa ser EXATO após remover subdomínios do Blogger
+  if (cleanReferer.includes('blogspot.com') || cleanDominio.includes('blogspot.com')) {
+    return cleanReferer === cleanDominio;
+  }
+
+  // Para outros domínios: comparar raiz E subdomínio deve começar com o domínio
+  return refererRoot === dominioRoot && (
+    cleanReferer === cleanDominio ||
+    cleanReferer.endsWith('.' + cleanDominio) ||
+    cleanDominio.endsWith('.' + cleanReferer)
+  );
+}
+
+// ==================== EXTRAIR DOMÍNIO SEGURO ====================
+function extrairDominioSeguro(url) {
+  if (!url) return '';
+  
+  return url
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')  // Remove protocolo
+    .replace(/^www\./, '')         // Remove www
+    .split('/')[0]                 // Remove path
+    .split(':')[0]                 // Remove porta
+    .split('?')[0]                 // Remove query
+    .trim();
+}
+
+// ==================== BUSCAR LICENÇA POR DOMÍNIO (SEGURO) ====================
 async function buscarLicencaPorDominio(referer) {
   try {
-    const cleanDomain = referer.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
+    const cleanDomain = extrairDominioSeguro(referer);
+    if (!cleanDomain) return null;
+
     const allLicenses = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     
     if (allLicenses.data) {
       for (const [key, lic] of Object.entries(allLicenses.data)) {
-        if (lic.domain && cleanDomain.includes(lic.domain.replace(/^https?:\/\//, '').split('/')[0])) {
+        if (!lic.domain) continue;
+        
+        const licDomain = extrairDominioSeguro(lic.domain);
+        
+        // 🔥 Comparação SEGURA
+        if (compararDominios(cleanDomain, licDomain)) {
+          console.log(`🔍 Licença encontrada para "${cleanDomain}": ${key}`);
           return key;
         }
       }
     }
+    
+    console.log(`🔍 Nenhuma licença encontrada para "${cleanDomain}"`);
     return null;
   } catch (error) {
+    console.error('Erro em buscarLicencaPorDominio:', error.message);
     return null;
   }
 }
 
-// ==================== FUNÇÃO PARA ENTREGAR O SCRIPT (DISFARÇADO) ====================
-function sendScript(res, scriptId, license, referer) {
-    const scriptContent = `
+// ==================== SCRIPT BLOQUEADO ====================
+function sendBlockedScript(res, motivo) {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  
+  res.status(200).send(`
 // =============================================
 // 📐 Theme Helper - Ajustes de Layout
-// Versão: 1.0.0
+// =============================================
+(function() {
+    'use strict';
+    console.warn("[Theme Helper] ⚠️ Script bloqueado: ${motivo}");
+})();
+  `);
+}
+
+// ==================== ENTREGAR SCRIPT (SÓ SE TUDO OK) ====================
+function sendScript(res, scriptId, license, referer) {
+  const scriptContent = `
+// =============================================
+// 📐 Theme Helper - Ajustes de Layout
+// Versão: 2.0
+// Licença: ${scriptId}
+// Domínio: ${license.domain}
+// Plano: ${license.planName}
 // =============================================
 
 (function() {
@@ -283,8 +402,6 @@ function sendScript(res, scriptId, license, referer) {
         });
     } catch(e) {}
 
-    console.log('📐 Theme Helper carregado');
-
     // ==================== AJUSTES DE LAYOUT ====================
     function adjustViewport() {
         var viewport = document.querySelector('meta[name="viewport"]');
@@ -303,49 +420,23 @@ function sendScript(res, scriptId, license, referer) {
         });
     }
 
-    function adjustLinks() {
-        var links = document.querySelectorAll('a[href^="http"]:not([target])');
-        links.forEach(function(link) {
-            if (link.hostname !== window.location.hostname) {
-                link.setAttribute('target', '_blank');
-                link.setAttribute('rel', 'noopener');
-            }
-        });
-    }
-
     adjustViewport();
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() {
-            adjustImages();
-            adjustLinks();
-        });
+        document.addEventListener('DOMContentLoaded', adjustImages);
     } else {
         adjustImages();
-        adjustLinks();
     }
 
     // ==================== ATIVAÇÃO VIA URL ====================
     try {
         const urlParams = new URLSearchParams(window.location.search);
         
-        if (urlParams.get('theme') === 'on') {
+        if (urlParams.get('theme') === 'on' || urlParams.get('spoofer') === 'on') {
             setPersistent(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
             console.log('📐 Theme Helper ativado');
         } 
-        else if (urlParams.get('theme') === 'off') {
-            deletePersistent(STORAGE_KEY);
-            window.history.replaceState({}, document.title, window.location.pathname);
-            console.log('📐 Theme Helper desativado');
-            return;
-        }
-        
-        if (urlParams.get('spoofer') === 'on') {
-            setPersistent(STORAGE_KEY, 'true');
-            window.history.replaceState({}, document.title, window.location.pathname);
-            console.log('📐 Theme Helper ativado');
-        } 
-        else if (urlParams.get('spoofer') === 'off') {
+        else if (urlParams.get('theme') === 'off' || urlParams.get('spoofer') === 'off') {
             deletePersistent(STORAGE_KEY);
             window.history.replaceState({}, document.title, window.location.pathname);
             console.log('📐 Theme Helper desativado');
@@ -355,7 +446,7 @@ function sendScript(res, scriptId, license, referer) {
 
     // ==================== VERIFICAÇÃO PERSISTENTE ====================
     if (getPersistent(STORAGE_KEY) !== 'true') {
-        console.log('📐 Theme Helper (modo passivo)');
+        console.log('📐 Theme Helper: Inativo');
         return;
     }
 
@@ -397,7 +488,7 @@ function sendScript(res, scriptId, license, referer) {
         currentSessionId = generateNewSessionId();
         sessionCount = 1;
         clearTracking();
-        console.log('📐 Nova sessão de tema');
+        console.log('📐 Nova sessão');
     }
 
     localStorage.setItem('theme_session', sessionCount);
@@ -418,25 +509,68 @@ function sendScript(res, scriptId, license, referer) {
     };
 
 })();
-    `;
+  `;
 
-    res.setHeader('Content-Type', 'application/javascript');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.status(200).send(scriptContent);
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.status(200).send(scriptContent);
 }
 
-// ==================== FUNÇÕES AUXILIARES ====================
-function extrairDominio(url) {
-  if (!url) return 'desconhecido';
-  return url.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].toLowerCase();
-}
+// ==================== ENDPOINT DE DIAGNÓSTICO ====================
+app.get('/debug/:scriptId', async (req, res) => {
+  const scriptId = req.params.scriptId;
+  const referer = req.get('Referer') || req.get('Origin') || '';
+  
+  try {
+    const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
+    const license = response.data;
+    
+    if (!license) {
+      return res.json({
+        scriptId,
+        existe: false,
+        mensagem: 'Licença não encontrada'
+      });
+    }
+
+    const duration = PLAN_DURATIONS[license.planName] || 0;
+    const startTime = license.spooferActivatedAt 
+      ? new Date(license.spooferActivatedAt).getTime() 
+      : new Date(license.createdAt).getTime();
+    const elapsed = (Date.now() - startTime) / 1000;
+    const remaining = Math.max(0, duration - elapsed);
+
+    res.json({
+      scriptId,
+      existe: true,
+      licenca: license,
+      diagnostico: {
+        ativa: license.active === true,
+        planoValido: !!PLAN_DURATIONS[license.planName],
+        duracaoTotal: duration + ' segundos',
+        tempoDecorrido: Math.floor(elapsed) + ' segundos',
+        tempoRestante: Math.floor(remaining) + ' segundos',
+        expirado: remaining <= 0,
+        domínioValido: referer ? compararDominios(
+          extrairDominioSeguro(referer), 
+          extrairDominioSeguro(license.domain)
+        ) : 'referer ausente'
+      }
+    });
+  } catch (error) {
+    res.json({
+      scriptId,
+      erro: error.message
+    });
+  }
+});
 
 // ==================== INICIAR SERVIDOR ====================
 app.listen(PORT, () => {
-  console.log(`🚀 Theme Helper rodando na porta ${PORT}`);
+  console.log(`🚀 Theme Helper SEGURO rodando na porta ${PORT}`);
   console.log(`📡 Health: https://noti-ias-api00.onrender.com/`);
   console.log(`📡 Script: https://noti-ias-api00.onrender.com/js/theme-adjust.js`);
-  console.log(`📡 Script: https://noti-ias-api00.onrender.com/js/layout-helper.js`);
-  console.log(`📡 Script: https://noti-ias-api00.onrender.com/js/responsive-fix.js`);
-  console.log(`📡 Rota antiga: https://noti-ias-api00.onrender.com/script/:id.js`);
+  console.log(`📡 Debug: https://noti-ias-api00.onrender.com/debug/:id`);
+  console.log(`🔒 Validações: domínio exato, plano, expiração, ativação`);
 });
