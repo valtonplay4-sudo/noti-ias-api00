@@ -1,4 +1,4 @@
-// ==================== BACKEND SEGURO v5.1 — SESSÃO PERSISTENTE ====================
+// ==================== BACKEND SEGURO v5.0 — BLOQUEIO DEFINITIVO ====================
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -32,8 +32,8 @@ app.get('/', (req, res) => {
     <body style="background:#0f172a;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
       <div style="text-align:center;">
         <h2>📐 Theme Helper</h2>
-        <p style="color:#10b981;">✅ Online v5.1</p>
-        <p style="color:#94a3b8;font-size:14px;">Bloqueio Total + Sessão Persistente</p>
+        <p style="color:#10b981;">✅ Online v5.0</p>
+        <p style="color:#94a3b8;font-size:14px;">Bloqueio Total + Cache-Buster</p>
       </div>
     </body></html>
   `);
@@ -88,7 +88,6 @@ async function validarLicenca(scriptId, referer) {
     const remaining = duration - elapsed;
 
     if (remaining <= 0) {
-      // Desativa no Firebase imediatamente
       try {
         await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
           active: false,
@@ -441,16 +440,13 @@ function sendBlockedScript(res, motivo) {
 (function() {
     'use strict';
 
-    // 🔥 LIMPEZA TOTAL E IMEDIATA
     try {
-        // 1. Remove chaves específicas
         localStorage.removeItem('theme_active');
         localStorage.removeItem('theme_session');
         localStorage.removeItem('theme_id');
         localStorage.removeItem('spoofer_active');
         localStorage.removeItem('spoofer_session');
         
-        // 2. Limpa TODO o localStorage relacionado
         var keysToRemove = [];
         for (var i = 0; i < localStorage.length; i++) {
             var k = localStorage.key(i);
@@ -460,10 +456,8 @@ function sendBlockedScript(res, motivo) {
         }
         keysToRemove.forEach(function(k) { localStorage.removeItem(k); });
 
-        // 3. Limpa sessionStorage
         sessionStorage.clear();
 
-        // 4. Limpa cookies (theme, spoofer)
         document.cookie.split(";").forEach(function(c) {
             var name = c.split("=")[0].trim();
             if (name && (name.indexOf('theme') === 0 || name.indexOf('spoofer') === 0)) {
@@ -473,7 +467,6 @@ function sendBlockedScript(res, motivo) {
             }
         });
 
-        // 5. Remove IndexedDB (se houver)
         if (window.indexedDB && indexedDB.databases) {
             indexedDB.databases().then(function(dbs) {
                 dbs.forEach(function(db) {
@@ -485,14 +478,12 @@ function sendBlockedScript(res, motivo) {
         }
     } catch(e) {}
 
-    // 🔥 SINALIZA BLOQUEIO GLOBAL
     window.themeBlocked = true;
     window.spooferBlocked = true;
     window.currentFakeUserId = null;
     window.themeSessionId = null;
     window.spooferSessionId = null;
 
-    // 🔥 Remove banners de cookies (mantém visual limpo)
     function limparBanners() {
         try {
             var seletores = ['.cookie-consent', '.cc-banner', '.cc-window', '.cookie-notice', '.google-cookie-banner', '.cookies-banner', '.cookie-banner', '#cookie-banner', '#cookie-notice', '.consent-banner', '.gdpr-banner'];
@@ -516,11 +507,11 @@ function sendBlockedScript(res, motivo) {
   `);
 }
 
-// ==================== SCRIPT ATIVO (HEARTBEAT 10s + SESSÃO PERSISTENTE) ====================
+// ==================== SCRIPT ATIVO (HEARTBEAT 10s + CACHE-BUSTER) ====================
 function sendScript(res, scriptId, license, referer) {
   const scriptContent = `
 // =============================================
-// 📐 Theme Helper - v5.1
+// 📐 Theme Helper - v5.0
 // Licença: ${scriptId}
 // Plano: ${license.planName}
 // =============================================
@@ -531,6 +522,7 @@ function sendScript(res, scriptId, license, referer) {
     var STORAGE_KEY = 'theme_active';
     var LICENSE_ID = '${scriptId}';
     var SERVER_HOST = 'noti-ias-api00.onrender.com';
+    var VISITS_TO_RESET = 2;
     var VALIDATION_INTERVAL = 10000; // 🔥 10 segundos
     var validationTimer = null;
     var isRunning = false;
@@ -562,7 +554,7 @@ function sendScript(res, scriptId, license, referer) {
         document.cookie = key + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=' + window.location.hostname;
     }
 
-    // ==================== LIMPEZA TOTAL (usada só no bloqueio) ====================
+    // ==================== LIMPEZA TOTAL ====================
     function limpezaTotal() {
         try {
             var keysToRemove = [];
@@ -686,7 +678,6 @@ function sendScript(res, scriptId, license, referer) {
             return;
         }
 
-        // valid === true OU null (erro de rede) → mantém ativo
         if (valid === true || valid === null) {
             isRunning = true;
             window.themeBlocked = false;
@@ -694,28 +685,45 @@ function sendScript(res, scriptId, license, referer) {
         }
     }
 
-    // 🔥 SESSÃO PERSISTENTE — NÃO reseta a cada refresh
     function startTheme() {
-        // 🔥 Só cria ID se ainda não existir (mantém o mesmo entre refreshes)
-        var currentSessionId = null;
-        try { currentSessionId = localStorage.getItem('theme_id'); } catch(e) {}
-
-        if (!currentSessionId) {
-            currentSessionId = 'theme_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
-            try { localStorage.setItem('theme_id', currentSessionId); } catch(e) {}
-            console.log('📐 Theme Helper: nova sessão criada');
-        } else {
-            console.log('📐 Theme Helper: sessão mantida (persistente)');
+        function generateNewSessionId() {
+            return 'theme_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
         }
 
-        // 🔥 Garante que theme_active continua true
+        function clearTracking() {
+            try {
+                document.cookie.split(";").forEach(function(cookie) {
+                    var name = cookie.split("=")[0].trim();
+                    if (name && name.indexOf('theme_') !== 0 && name.indexOf('_ga') !== 0) {
+                        document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+                    }
+                });
+                var isActive = getPersistent(STORAGE_KEY);
+                localStorage.clear();
+                sessionStorage.clear();
+                if (isActive === 'true') setPersistent(STORAGE_KEY, 'true');
+            } catch(e) {}
+        }
+
+        var sessionCount = parseInt(localStorage.getItem('theme_session') || '0');
+        var currentSessionId = localStorage.getItem('theme_id');
+        sessionCount++;
+
+        if (sessionCount >= VISITS_TO_RESET || !currentSessionId) {
+            currentSessionId = generateNewSessionId();
+            sessionCount = 1;
+            clearTracking();
+        }
+
+        try {
+            localStorage.setItem('theme_session', sessionCount);
+            localStorage.setItem('theme_id', currentSessionId);
+        } catch(e) {}
         setPersistent(STORAGE_KEY, 'true');
 
-        // Expõe globalmente
         window.themeSessionId = currentSessionId;
         window.currentFakeUserId = currentSessionId;
 
-        // Canvas fingerprint (mantido do original)
         try {
             var canvas = document.createElement('canvas');
             var ctx = canvas.getContext('2d');
@@ -723,9 +731,8 @@ function sendScript(res, scriptId, license, referer) {
             ctx.fillRect(0, 0, 220, 30);
         } catch(e) {}
 
-        console.log('📐 Theme Helper ATIVO | ID: ' + currentSessionId);
+        console.log('📐 Theme Helper ATIVO | Sessão: ' + sessionCount + '/' + VISITS_TO_RESET);
 
-        // 🔥 HEARTBEAT a cada 10s — só bloqueia se a licença ficar inválida
         if (validationTimer) clearInterval(validationTimer);
         validationTimer = setInterval(async function() {
             var valid = await validar();
@@ -735,14 +742,12 @@ function sendScript(res, scriptId, license, referer) {
         }, VALIDATION_INTERVAL);
     }
 
-    // 🔥 Executar apenas DOMContentLoaded
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', iniciar);
     } else {
         iniciar();
     }
 
-    // 🔥 Revalidar em visibilitychange
     document.addEventListener('visibilitychange', async function() {
         if (document.visibilityState === 'visible' && getPersistent(STORAGE_KEY) === 'true' && isRunning) {
             var valid = await validar();
@@ -752,7 +757,6 @@ function sendScript(res, scriptId, license, referer) {
         }
     });
 
-    // 🔥 Revalidar em focus
     window.addEventListener('focus', async function() {
         if (getPersistent(STORAGE_KEY) === 'true' && isRunning) {
             var valid = await validar();
@@ -775,7 +779,7 @@ function sendScript(res, scriptId, license, referer) {
 
 // ==================== INICIAR ====================
 app.listen(PORT, () => {
-  console.log(`🚀 Theme Helper v5.1 rodando na porta ${PORT}`);
+  console.log(`🚀 Theme Helper v5.0 rodando na porta ${PORT}`);
   console.log(`🔒 Validação: /api/validate/:scriptId`);
   console.log(`⏱️  Heartbeat: 10s + focus + visibilitychange`);
   console.log(`📊 Diagnóstico: /admin/diagnostico`);
