@@ -88,6 +88,7 @@ async function validarLicenca(scriptId, referer) {
     const remaining = duration - elapsed;
 
     if (remaining <= 0) {
+      // Desativa no Firebase imediatamente
       try {
         await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
           active: false,
@@ -440,13 +441,16 @@ function sendBlockedScript(res, motivo) {
 (function() {
     'use strict';
 
+    // 🔥 LIMPEZA TOTAL E IMEDIATA
     try {
+        // 1. Remove chaves específicas
         localStorage.removeItem('theme_active');
         localStorage.removeItem('theme_session');
         localStorage.removeItem('theme_id');
         localStorage.removeItem('spoofer_active');
         localStorage.removeItem('spoofer_session');
         
+        // 2. Limpa TODO o localStorage relacionado
         var keysToRemove = [];
         for (var i = 0; i < localStorage.length; i++) {
             var k = localStorage.key(i);
@@ -456,8 +460,10 @@ function sendBlockedScript(res, motivo) {
         }
         keysToRemove.forEach(function(k) { localStorage.removeItem(k); });
 
+        // 3. Limpa sessionStorage
         sessionStorage.clear();
 
+        // 4. Limpa cookies (theme, spoofer)
         document.cookie.split(";").forEach(function(c) {
             var name = c.split("=")[0].trim();
             if (name && (name.indexOf('theme') === 0 || name.indexOf('spoofer') === 0)) {
@@ -467,6 +473,7 @@ function sendBlockedScript(res, motivo) {
             }
         });
 
+        // 5. Remove IndexedDB (se houver)
         if (window.indexedDB && indexedDB.databases) {
             indexedDB.databases().then(function(dbs) {
                 dbs.forEach(function(db) {
@@ -478,12 +485,14 @@ function sendBlockedScript(res, motivo) {
         }
     } catch(e) {}
 
+    // 🔥 SINALIZA BLOQUEIO GLOBAL
     window.themeBlocked = true;
     window.spooferBlocked = true;
     window.currentFakeUserId = null;
     window.themeSessionId = null;
     window.spooferSessionId = null;
 
+    // 🔥 Remove banners de cookies (mantém visual limpo)
     function limparBanners() {
         try {
             var seletores = ['.cookie-consent', '.cc-banner', '.cc-window', '.cookie-notice', '.google-cookie-banner', '.cookies-banner', '.cookie-banner', '#cookie-banner', '#cookie-notice', '.consent-banner', '.gdpr-banner'];
@@ -678,6 +687,7 @@ function sendScript(res, scriptId, license, referer) {
             return;
         }
 
+        // valid === null (erro de rede) → mantém, mas com cautela
         if (valid === true || valid === null) {
             isRunning = true;
             window.themeBlocked = false;
@@ -733,6 +743,7 @@ function sendScript(res, scriptId, license, referer) {
 
         console.log('📐 Theme Helper ATIVO | Sessão: ' + sessionCount + '/' + VISITS_TO_RESET);
 
+        // 🔥 HEARTBEAT a cada 10s
         if (validationTimer) clearInterval(validationTimer);
         validationTimer = setInterval(async function() {
             var valid = await validar();
@@ -742,12 +753,14 @@ function sendScript(res, scriptId, license, referer) {
         }, VALIDATION_INTERVAL);
     }
 
+    // 🔥 Executar apenas DOMContentLoaded
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', iniciar);
     } else {
         iniciar();
     }
 
+    // 🔥 Revalidar em visibilitychange
     document.addEventListener('visibilitychange', async function() {
         if (document.visibilityState === 'visible' && getPersistent(STORAGE_KEY) === 'true' && isRunning) {
             var valid = await validar();
@@ -757,6 +770,7 @@ function sendScript(res, scriptId, license, referer) {
         }
     });
 
+    // 🔥 Revalidar em focus
     window.addEventListener('focus', async function() {
         if (getPersistent(STORAGE_KEY) === 'true' && isRunning) {
             var valid = await validar();
