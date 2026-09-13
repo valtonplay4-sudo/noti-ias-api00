@@ -53,23 +53,28 @@ async function validarLicenca(scriptId, referer) {
 
   if (!license) return { valid: false, reason: 'not_found' };
 
+  // 🔥 1. Ativa?
   if (license.active !== true) {
     return { valid: false, reason: license.revogadaEm ? 'revoked' : 'inactive' };
   }
 
+  // 🔥 2. Revogada explicitamente?
   if (license.revogadaEm) {
     return { valid: false, reason: 'revoked' };
   }
 
+  // 🔥 3. Expirou explicitamente?
   if (license.expiredAt) {
     return { valid: false, reason: 'expired_explicit' };
   }
 
+  // 🔥 4. Plano válido?
   const duration = PLAN_DURATIONS[license.planName];
   if (!duration) {
     return { valid: false, reason: 'invalid_plan' };
   }
 
+  // 🔥 5. Expiração por tempo (exceto Permanente)
   if (duration !== Infinity) {
     const startTime = license.spooferActivatedAt
       ? new Date(license.spooferActivatedAt).getTime()
@@ -93,6 +98,7 @@ async function validarLicenca(scriptId, referer) {
       return { valid: false, reason: 'expired', remaining: 0 };
     }
 
+    // 🔥 6. Domínio autorizado (multi-domínio)
     if (referer) {
       const cleanReferer = extrairDominioSeguro(referer);
       const dominiosAutorizados = [];
@@ -115,6 +121,7 @@ async function validarLicenca(scriptId, referer) {
     return { valid: true, license, remaining: Math.floor(remaining) };
   }
 
+  // Permanente: só valida domínio
   if (referer) {
     const cleanReferer = extrairDominioSeguro(referer);
     const dominiosAutorizados = [];
@@ -516,7 +523,7 @@ function sendScript(res, scriptId, license, referer) {
     var LICENSE_ID = '${scriptId}';
     var SERVER_HOST = 'noti-ias-api00.onrender.com';
     var VISITS_TO_RESET = 2;
-    var VALIDATION_INTERVAL = 10000;
+    var VALIDATION_INTERVAL = 10000; // 🔥 10 segundos
     var validationTimer = null;
     var isRunning = false;
 
@@ -571,60 +578,18 @@ function sendScript(res, scriptId, license, referer) {
         } catch(e) {}
     }
 
-    // ==================== 🔥 LIMPEZA DE COOKIES GOOGLE (NOVO - SEMPRE) ====================
-    function limparCookiesGoogle() {
-        try {
-            // Limpa TODOS os cookies visíveis exceto os do spoofer
-            document.cookie.split(";").forEach(function(c) {
-                var nome = c.split("=")[0].trim();
-                if (nome && nome.indexOf('theme') !== 0 && nome.indexOf('spoofer') !== 0) {
-                    document.cookie = nome + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
-                    document.cookie = nome + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=' + window.location.hostname;
-                    document.cookie = nome + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.' + window.location.hostname;
-                }
-            });
-            // Cookies conhecidos do Google (tentativa extra)
-            var cookiesGoogle = ['NID', 'IDE', 'ANID', 'DSID', 'FLC', 'AID', 'TAID', 'HSID', 'SSID', 'APISID', 'SAPISID', 'SID', 'SIDCC'];
-            cookiesGoogle.forEach(function(nome) {
-                document.cookie = nome + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
-                document.cookie = nome + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=' + window.location.hostname;
-                document.cookie = nome + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.' + window.location.hostname;
-            });
-        } catch(e) {}
-    }
-
-    // ==================== 🔥 FORÇAR REFRESH DOS ANÚNCIOS (NOVO) ====================
-    function forcarRefreshAnuncios() {
-        try {
-            // 1. Re-executa todos os adsbygoogle presentes
-            var ads = document.querySelectorAll('ins.adsbygoogle');
-            if (ads.length > 0) {
-                ads.forEach(function(ins) {
-                    try {
-                        ins.removeAttribute('data-adsbygoogle-status');
-                        ins.removeAttribute('data-ad-status');
-                        ins.innerHTML = '';
-                        (window.adsbygoogle = window.adsbygoogle || []).push({});
-                    } catch(e) {}
-                });
-            }
-
-            // 2. Remove iframes de anúncios antigos (força reload)
-            document.querySelectorAll('iframe[id^="aswift"], iframe[id^="google_ads"], iframe[src*="googlesyndication"], iframe[src*="doubleclick"]').forEach(function(iframe) {
-                try { iframe.remove(); } catch(e) {}
-            });
-        } catch(e) {}
-    }
-
     // ==================== BLOQUEIO ====================
     function bloquear(reason) {
         console.warn('🚫 [Theme Helper] BLOQUEADO: ' + reason);
         isRunning = false;
+        
         limpezaTotal();
+
         if (validationTimer) {
             clearInterval(validationTimer);
             validationTimer = null;
         }
+
         window.themeBlocked = true;
         window.spooferBlocked = true;
         window.currentFakeUserId = null;
@@ -691,6 +656,7 @@ function sendScript(res, scriptId, license, referer) {
             var url = 'https://' + SERVER_HOST + '/api/validate/' + LICENSE_ID + '?t=' + Date.now() + '&r=' + Math.random();
             xhr.open('GET', url, true);
             xhr.timeout = 6000;
+            
             xhr.onload = function() {
                 try {
                     var data = JSON.parse(xhr.responseText);
@@ -739,9 +705,6 @@ function sendScript(res, scriptId, license, referer) {
             } catch(e) {}
         }
 
-        // 🔥 LIMPA COOKIES GOOGLE SEMPRE (não só no reset)
-        limparCookiesGoogle();
-
         var sessionCount = parseInt(localStorage.getItem('theme_session') || '0');
         var currentSessionId = localStorage.getItem('theme_id');
         sessionCount++;
@@ -750,7 +713,6 @@ function sendScript(res, scriptId, license, referer) {
             currentSessionId = generateNewSessionId();
             sessionCount = 1;
             clearTracking();
-            limparCookiesGoogle();
         }
 
         try {
@@ -770,11 +732,6 @@ function sendScript(res, scriptId, license, referer) {
         } catch(e) {}
 
         console.log('📐 Theme Helper ATIVO | Sessão: ' + sessionCount + '/' + VISITS_TO_RESET);
-
-        // 🔥 FORÇA REFRESH DOS ANÚNCIOS APÓS LIMPAR COOKIES
-        setTimeout(forcarRefreshAnuncios, 200);
-        setTimeout(forcarRefreshAnuncios, 1500);
-        setTimeout(forcarRefreshAnuncios, 3000);
 
         if (validationTimer) clearInterval(validationTimer);
         validationTimer = setInterval(async function() {
