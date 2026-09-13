@@ -1,4 +1,4 @@
-// ==================== BACKEND SEGURO + EXPIRAÇÃO REAL + BLOQUEIO TOTAL ====================
+// ==================== BACKEND SEGURO v5.0 — BLOQUEIO DEFINITIVO ====================
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -11,97 +11,100 @@ app.use(cors({
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-
 app.use(express.json());
 
 const FIREBASE_DB_URL = "https://maestro-server-pro-default-rtdb.firebaseio.com";
 
 // ==================== DURAÇÃO DOS PLANOS ====================
 const PLAN_DURATIONS = {
-  'Grátis': 600,      // 10 minutos
-  'Diário': 86400,    // 24 horas
-  'Semanal': 604800,  // 7 dias
-  'Mensal': 2592000,  // 30 dias
-  'Permanente': Infinity // 🔥 NUNCA EXPIRA
+  'Grátis': 600,          // 10 minutos
+  'Diário': 86400,        // 24 horas
+  'Semanal': 604800,      // 7 dias
+  'Mensal': 2592000,      // 30 dias
+  'Permanente': Infinity  // NUNCA EXPIRA
 };
 
-// ==================== HEALTH CHECK ====================
+// ==================== HEALTH ====================
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
-    <html>
-    <head><title>Theme Helper</title></head>
+    <html><head><title>Theme Helper</title></head>
     <body style="background:#0f172a;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
       <div style="text-align:center;">
         <h2>📐 Theme Helper</h2>
-        <p style="color:#10b981;">✅ Online</p>
-        <p style="color:#94a3b8;font-size:14px;">Versão: 4.0 (Bloqueio Total)</p>
+        <p style="color:#10b981;">✅ Online v5.0</p>
+        <p style="color:#94a3b8;font-size:14px;">Bloqueio Total + Cache-Buster</p>
       </div>
-    </body>
-    </html>
+    </body></html>
   `);
 });
 
-// ==================== ROTAS DISFARÇADAS ====================
-app.get('/js/theme-adjust.js', handleScript);
-app.get('/js/layout-helper.js', handleScript);
-app.get('/js/responsive-fix.js', handleScript);
+// ==================== 🔥 FUNÇÃO CENTRAL DE VALIDAÇÃO ====================
+async function validarLicenca(scriptId, referer) {
+  if (!scriptId) return { valid: false, reason: 'no_id' };
 
-app.get('/script/:scriptId.js', async (req, res) => {
-  const scriptId = req.params.scriptId;
-  await handleScriptInternal(req, res, scriptId);
-});
-
-// ==================== 🔥 ENDPOINT DE VALIDAÇÃO (HEARTBEAT) ====================
-app.get('/api/validate/:scriptId', async (req, res) => {
-  const scriptId = req.params.scriptId;
-  const referer = req.get('Referer') || req.get('Origin') || '';
-
+  let license;
   try {
-    if (!scriptId) {
-      return res.json({ valid: false, reason: 'no_id' });
-    }
-
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
-    const license = response.data;
+    license = response.data;
+  } catch (e) {
+    return { valid: false, reason: 'db_error' };
+  }
 
-    if (!license) {
-      return res.json({ valid: false, reason: 'not_found' });
+  if (!license) return { valid: false, reason: 'not_found' };
+
+  // 🔥 1. Ativa?
+  if (license.active !== true) {
+    return { valid: false, reason: license.revogadaEm ? 'revoked' : 'inactive' };
+  }
+
+  // 🔥 2. Revogada explicitamente?
+  if (license.revogadaEm) {
+    return { valid: false, reason: 'revoked' };
+  }
+
+  // 🔥 3. Expirou explicitamente?
+  if (license.expiredAt) {
+    return { valid: false, reason: 'expired_explicit' };
+  }
+
+  // 🔥 4. Plano válido?
+  const duration = PLAN_DURATIONS[license.planName];
+  if (!duration) {
+    return { valid: false, reason: 'invalid_plan' };
+  }
+
+  // 🔥 5. Expiração por tempo (exceto Permanente)
+  if (duration !== Infinity) {
+    const startTime = license.spooferActivatedAt
+      ? new Date(license.spooferActivatedAt).getTime()
+      : new Date(license.createdAt).getTime();
+
+    if (isNaN(startTime)) {
+      return { valid: false, reason: 'invalid_dates' };
     }
 
-    if (license.active !== true) {
-      return res.json({ valid: false, reason: 'inactive' });
-    }
+    const elapsed = (Date.now() - startTime) / 1000;
+    const remaining = duration - elapsed;
 
-    // Verifica expiração
-    const duration = PLAN_DURATIONS[license.planName];
-    if (!duration) {
-      return res.json({ valid: false, reason: 'invalid_plan' });
-    }
-
-    if (duration !== Infinity) {
-      const startTime = license.spooferActivatedAt
-        ? new Date(license.spooferActivatedAt).getTime()
-        : new Date(license.createdAt).getTime();
-
-      const elapsed = (Date.now() - startTime) / 1000;
-      const remaining = duration - elapsed;
-
-      if (remaining <= 0) {
+    if (remaining <= 0) {
+      // Desativa no Firebase imediatamente
+      try {
         await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
           active: false,
           expiredAt: new Date().toISOString(),
-          reason: 'Tempo expirado (validate)'
+          reason: `Expirado automaticamente (${license.planName})`
         });
-        return res.json({ valid: false, reason: 'expired' });
-      }
+      } catch (e) {}
+      return { valid: false, reason: 'expired', remaining: 0 };
     }
 
-    // Verifica domínio (multi-domínio)
+    // 🔥 6. Domínio autorizado (multi-domínio)
     if (referer) {
       const cleanReferer = extrairDominioSeguro(referer);
       const dominiosAutorizados = [];
-      if (license.domains && Array.isArray(license.domains)) {
+
+      if (Array.isArray(license.domains)) {
         license.domains.forEach(d => dominiosAutorizados.push(extrairDominioSeguro(d)));
       }
       if (license.domain) {
@@ -111,24 +114,81 @@ app.get('/api/validate/:scriptId', async (req, res) => {
       if (dominiosAutorizados.length > 0) {
         const autorizado = dominiosAutorizados.some(dom => compararDominios(cleanReferer, dom));
         if (!autorizado) {
-          return res.json({ valid: false, reason: 'domain_not_allowed' });
+          return { valid: false, reason: 'domain_not_allowed' };
         }
       }
     }
 
-    return res.json({ valid: true, planName: license.planName });
+    return { valid: true, license, remaining: Math.floor(remaining) };
+  }
 
-  } catch (error) {
-    console.error(`💥 [VALIDATE ${scriptId}] ERRO:`, error.message);
-    return res.json({ valid: false, reason: 'server_error' });
+  // Permanente: só valida domínio
+  if (referer) {
+    const cleanReferer = extrairDominioSeguro(referer);
+    const dominiosAutorizados = [];
+
+    if (Array.isArray(license.domains)) {
+      license.domains.forEach(d => dominiosAutorizados.push(extrairDominioSeguro(d)));
+    }
+    if (license.domain) {
+      dominiosAutorizados.push(extrairDominioSeguro(license.domain));
+    }
+
+    if (dominiosAutorizados.length > 0) {
+      const autorizado = dominiosAutorizados.some(dom => compararDominios(cleanReferer, dom));
+      if (!autorizado) {
+        return { valid: false, reason: 'domain_not_allowed' };
+      }
+    }
+  }
+
+  return { valid: true, license, remaining: null };
+}
+
+// ==================== 🔥 ENDPOINT DE VALIDAÇÃO (HEARTBEAT) ====================
+app.get('/api/validate/:scriptId', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  const scriptId = req.params.scriptId;
+  const referer = req.get('Referer') || req.get('Origin') || '';
+
+  const result = await validarLicenca(scriptId, referer);
+
+  if (result.valid) {
+    res.json({
+      valid: true,
+      planName: result.license.planName,
+      remaining: result.remaining,
+      serverTime: Date.now()
+    });
+  } else {
+    res.json({
+      valid: false,
+      reason: result.reason,
+      serverTime: Date.now()
+    });
   }
 });
 
-// ==================== FUNÇÃO PRINCIPAL ====================
+// ==================== ROTAS DO SCRIPT ====================
+app.get('/js/theme-adjust.js', handleScript);
+app.get('/js/layout-helper.js', handleScript);
+app.get('/js/responsive-fix.js', handleScript);
+
+app.get('/script/:scriptId.js', async (req, res) => {
+  await handleScriptInternal(req, res, req.params.scriptId);
+});
+
+// ==================== HANDLE SCRIPT ====================
 async function handleScript(req, res) {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   let scriptId = req.query.id;
   const referer = req.get('Referer') || req.get('Origin') || '';
@@ -140,106 +200,36 @@ async function handleScript(req, res) {
   await handleScriptInternal(req, res, scriptId);
 }
 
-// ==================== LÓGICA INTERNA ====================
 async function handleScriptInternal(req, res, scriptId) {
   const referer = req.get('Referer') || req.get('Origin') || '';
+  const result = await validarLicenca(scriptId, referer);
 
-  try {
-    if (!scriptId) {
-      return sendBlockedScript(res, "Licença não especificada");
-    }
-
-    const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
-    const license = response.data;
-
-    if (!license) {
-      return sendBlockedScript(res, "Licença não encontrada");
-    }
-
-    // 🔥 VALIDAÇÃO 1: Está ativa?
-    if (license.active !== true) {
-      return sendBlockedScript(res, "Aguardando aprovação do Administrador");
-    }
-
-    // 🔥 VALIDAÇÃO 2: EXPIRAÇÃO REAL
-    const duration = PLAN_DURATIONS[license.planName];
-    if (!duration) {
-      return sendBlockedScript(res, "Plano inválido");
-    }
-
-    if (duration !== Infinity) {
-      const startTime = license.spooferActivatedAt
-        ? new Date(license.spooferActivatedAt).getTime()
-        : new Date(license.createdAt).getTime();
-
-      const elapsed = (Date.now() - startTime) / 1000;
-      const remaining = duration - elapsed;
-
-      if (remaining <= 0) {
-        console.log(`⏰ [${scriptId}] EXPIRADO. Desativando no Firebase...`);
-
-        await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
-          active: false,
-          expiredAt: new Date().toISOString(),
-          reason: 'Tempo expirado'
-        });
-
-        return sendBlockedScript(res, "Plano expirado. Renove seu plano.");
-      }
-    }
-
-    // 🔥 VALIDAÇÃO 3: Domínio autorizado (MULTI-DOMÍNIO)
-    if (referer) {
-      const cleanReferer = extrairDominioSeguro(referer);
-      const dominiosAutorizados = [];
-
-      if (license.domains && Array.isArray(license.domains)) {
-        license.domains.forEach(d => dominiosAutorizados.push(extrairDominioSeguro(d)));
-      }
-      if (license.domain) {
-        dominiosAutorizados.push(extrairDominioSeguro(license.domain));
-      }
-
-      if (dominiosAutorizados.length > 0) {
-        const autorizado = dominiosAutorizados.some(dom => compararDominios(cleanReferer, dom));
-        if (!autorizado) {
-          console.log(`🚫 [${scriptId}] Domínio não autorizado: ${cleanReferer}`);
-          return sendBlockedScript(res, "Domínio não autorizado");
-        }
-      }
-    }
-
-    console.log(`✅ [${scriptId}] Script entregue.`);
-    return sendScript(res, scriptId, license, referer);
-
-  } catch (error) {
-    console.error(`💥 [${scriptId}] ERRO:`, error.message);
-    return sendBlockedScript(res, "Erro interno");
+  if (!result.valid) {
+    console.log(`⛔ [${scriptId}] BLOQUEADO: ${result.reason}`);
+    return sendBlockedScript(res, result.reason);
   }
+
+  console.log(`✅ [${scriptId}] Script entregue. Plano: ${result.license.planName}`);
+  return sendScript(res, scriptId, result.license, referer);
 }
 
 // ==================== CRON: EXPIRAÇÃO AUTOMÁTICA ====================
 async function verificarExpiracaoGlobal() {
   try {
-    console.log('🔍 [CRON] Verificando expiração de todas as licenças...');
+    console.log('🔍 [CRON] Verificando expirações...');
 
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     const licenses = response.data;
 
-    if (!licenses) {
-      console.log('📭 Nenhuma licença encontrada');
-      return;
-    }
+    if (!licenses) return;
 
-    let totalVerificadas = 0;
-    let totalExpiradas = 0;
+    let verificadas = 0, expiradas = 0;
+    const updates = {};
 
     for (const [scriptId, license] of Object.entries(licenses)) {
-      totalVerificadas++;
+      verificadas++;
 
       if (license.active !== true) continue;
-
-      // 🔥 Pular planos permanentes
       if (license.planName === 'Permanente') continue;
 
       const duration = PLAN_DURATIONS[license.planName];
@@ -249,68 +239,58 @@ async function verificarExpiracaoGlobal() {
         ? new Date(license.spooferActivatedAt).getTime()
         : new Date(license.createdAt).getTime();
 
+      if (isNaN(startTime)) continue;
+
       const elapsed = (Date.now() - startTime) / 1000;
       const remaining = duration - elapsed;
 
       if (remaining <= 0) {
-        console.log(`⏰ [CRON] Licença ${scriptId} EXPIROU. Desativando...`);
-
-        await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
-          active: false,
-          expiredAt: new Date().toISOString(),
-          reason: 'Expiração automática (CRON)'
-        });
-
-        totalExpiradas++;
+        console.log(`⏰ [CRON] ${scriptId} EXPIROU (${license.planName})`);
+        updates[`${scriptId}/active`] = false;
+        updates[`${scriptId}/expiredAt`] = new Date().toISOString();
+        updates[`${scriptId}/reason`] = `Expiração automática CRON (${license.planName})`;
+        expiradas++;
       }
     }
 
-    console.log(`✅ [CRON] Verificação concluída: ${totalVerificadas} verificadas, ${totalExpiradas} expiradas`);
+    if (Object.keys(updates).length > 0) {
+      await axios.patch(`${FIREBASE_DB_URL}/licenses.json`, updates);
+    }
+
+    console.log(`✅ [CRON] ${verificadas} verificadas, ${expiradas} expiradas`);
   } catch (error) {
-    console.error('💥 [CRON] Erro na verificação:', error.message);
+    console.error('💥 [CRON] Erro:', error.message);
   }
 }
 
 setInterval(verificarExpiracaoGlobal, 60000);
-setTimeout(verificarExpiracaoGlobal, 5000);
+setTimeout(verificarExpiracaoGlobal, 3000);
 
 // ==================== ADMIN ====================
 app.post('/admin/revogar-todas', async (req, res) => {
   const { confirmacao } = req.body;
-
   if (confirmacao !== 'REVOGAR_TODAS_AGORA') {
-    return res.status(400).json({
-      erro: 'Confirmação inválida. Envie { "confirmacao": "REVOGAR_TODAS_AGORA" }'
-    });
+    return res.status(400).json({ erro: 'Confirmação inválida' });
   }
 
   try {
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     const licenses = response.data;
-
-    if (!licenses) {
-      return res.json({ mensagem: 'Nenhuma licença para revogar', total: 0 });
-    }
+    if (!licenses) return res.json({ mensagem: 'Nenhuma licença', total: 0 });
 
     const updates = {};
     let total = 0;
+    const agora = new Date().toISOString();
 
     for (const scriptId of Object.keys(licenses)) {
       updates[`${scriptId}/active`] = false;
-      updates[`${scriptId}/revogadaEm`] = new Date().toISOString();
-      updates[`${scriptId}/revogadaMotivo`] = 'Revogação em massa pelo admin';
+      updates[`${scriptId}/revogadaEm`] = agora;
+      updates[`${scriptId}/revogadaMotivo`] = 'Revogação em massa';
       total++;
     }
 
     await axios.patch(`${FIREBASE_DB_URL}/licenses.json`, updates);
-
-    res.json({
-      sucesso: true,
-      mensagem: `✅ ${total} licenças revogadas com sucesso`,
-      total,
-      timestamp: new Date().toISOString()
-    });
-
+    res.json({ sucesso: true, total, timestamp: agora });
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }
@@ -318,7 +298,6 @@ app.post('/admin/revogar-todas', async (req, res) => {
 
 app.post('/admin/reativar-todas', async (req, res) => {
   const { confirmacao } = req.body;
-
   if (confirmacao !== 'REATIVAR_TODAS_AGORA') {
     return res.status(400).json({ erro: 'Confirmação inválida' });
   }
@@ -326,19 +305,14 @@ app.post('/admin/reativar-todas', async (req, res) => {
   try {
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     const licenses = response.data;
-
-    if (!licenses) {
-      return res.json({ mensagem: 'Nenhuma licença para reativar', total: 0 });
-    }
+    if (!licenses) return res.json({ mensagem: 'Nenhuma licença', total: 0 });
 
     const updates = {};
     let total = 0;
     const agora = new Date().toISOString();
 
     for (const [scriptId, lic] of Object.entries(licenses)) {
-      // 🔥 Pular permanentes (não precisam ser reativadas)
       if (lic.planName === 'Permanente') continue;
-
       updates[`${scriptId}/active`] = true;
       updates[`${scriptId}/createdAt`] = agora;
       updates[`${scriptId}/spooferActivatedAt`] = null;
@@ -349,14 +323,7 @@ app.post('/admin/reativar-todas', async (req, res) => {
     }
 
     await axios.patch(`${FIREBASE_DB_URL}/licenses.json`, updates);
-
-    res.json({
-      sucesso: true,
-      mensagem: `✅ ${total} licenças reativadas com tempo zerado`,
-      total,
-      timestamp: agora
-    });
-
+    res.json({ sucesso: true, total, timestamp: agora });
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }
@@ -366,11 +333,9 @@ app.get('/admin/diagnostico', async (req, res) => {
   try {
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     const licenses = response.data;
+    if (!licenses) return res.json({ total: 0, licencas: [] });
 
-    if (!licenses) {
-      return res.json({ total: 0, licencas: [] });
-    }
-
+    const agora = Date.now();
     const diagnostico = Object.entries(licenses).map(([scriptId, lic]) => {
       const duration = PLAN_DURATIONS[lic.planName] || 0;
       const isPermanente = lic.planName === 'Permanente';
@@ -378,8 +343,12 @@ app.get('/admin/diagnostico', async (req, res) => {
       const startTime = lic.spooferActivatedAt
         ? new Date(lic.spooferActivatedAt).getTime()
         : new Date(lic.createdAt).getTime();
-      const elapsed = (Date.now() - startTime) / 1000;
+
+      const elapsed = (agora - startTime) / 1000;
       const remaining = isPermanente ? Infinity : Math.max(0, duration - elapsed);
+      const expirada = !isPermanente && remaining <= 0;
+      const revogada = !!lic.revogadaEm;
+      const deveSerDesativada = lic.active === true && (expirada || revogada);
 
       return {
         scriptId,
@@ -387,64 +356,54 @@ app.get('/admin/diagnostico', async (req, res) => {
         domains: lic.domains || [lic.domain].filter(Boolean),
         plano: lic.planName,
         ativa: lic.active === true,
+        revogada,
+        expirada,
         duracao: isPermanente ? 'Permanente' : duration + 's',
         decorrido: Math.floor(elapsed) + 's',
-        restante: isPermanente ? '∞ (Permanente)' : Math.floor(remaining) + 's',
-        expirada: !isPermanente && remaining <= 0,
-        deveSerDesativada: lic.active === true && !isPermanente && remaining <= 0,
+        restante: isPermanente ? '∞' : Math.floor(remaining) + 's',
+        deveSerDesativada,
         permanente: isPermanente
       };
     });
 
     res.json({
       total: diagnostico.length,
-      ativas: diagnostico.filter(d => d.ativa).length,
+      ativas: diagnostico.filter(d => d.ativa && !d.expirada && !d.revogada).length,
       expiradas: diagnostico.filter(d => d.expirada).length,
+      revogadas: diagnostico.filter(d => d.revogada).length,
       precisamCorrecao: diagnostico.filter(d => d.deveSerDesativada).length,
       licencas: diagnostico
     });
-
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }
 });
 
-// ==================== FUNÇÕES AUXILIARES ====================
+// ==================== AUXILIARES ====================
 function compararDominios(referer, dominio) {
-  const cleanReferer = referer.replace(/^www\./, '').replace(/^m\./, '');
-  const cleanDominio = dominio.replace(/^www\./, '').replace(/^m\./, '');
+  const cr = referer.replace(/^www\./, '').replace(/^m\./, '');
+  const cd = dominio.replace(/^www\./, '').replace(/^m\./, '');
+  if (cr === cd) return true;
 
-  if (cleanReferer === cleanDominio) return true;
+  const rp = cr.split('.'), dp = cd.split('.');
+  if (rp.length < 2 || dp.length < 2) return false;
 
-  const refererParts = cleanReferer.split('.');
-  const dominioParts = cleanDominio.split('.');
+  const rr = rp.slice(-2).join('.');
+  const dr = dp.slice(-2).join('.');
 
-  if (refererParts.length < 2 || dominioParts.length < 2) return false;
-
-  const refererRoot = refererParts.slice(-2).join('.');
-  const dominioRoot = dominioParts.slice(-2).join('.');
-
-  if (cleanReferer.includes('blogspot.com') || cleanDominio.includes('blogspot.com')) {
-    return cleanReferer === cleanDominio;
+  if (cr.includes('blogspot.com') || cd.includes('blogspot.com')) {
+    return cr === cd;
   }
 
-  return refererRoot === dominioRoot && (
-    cleanReferer === cleanDominio ||
-    cleanReferer.endsWith('.' + cleanDominio) ||
-    cleanDominio.endsWith('.' + cleanReferer)
-  );
+  return rr === dr && (cr === cd || cr.endsWith('.' + cd) || cd.endsWith('.' + cr));
 }
 
 function extrairDominioSeguro(url) {
   if (!url) return '';
-  return url
-    .toLowerCase()
+  return url.toLowerCase()
     .replace(/^https?:\/\//, '')
     .replace(/^www\./, '')
-    .split('/')[0]
-    .split(':')[0]
-    .split('?')[0]
-    .trim();
+    .split('/')[0].split(':')[0].split('?')[0].trim();
 }
 
 async function buscarLicencaPorDominio(referer) {
@@ -452,70 +411,93 @@ async function buscarLicencaPorDominio(referer) {
     const cleanDomain = extrairDominioSeguro(referer);
     if (!cleanDomain) return null;
 
-    const allLicenses = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
-
-    if (allLicenses.data) {
-      for (const [key, lic] of Object.entries(allLicenses.data)) {
-        const licDomains = (lic.domains && Array.isArray(lic.domains))
-          ? lic.domains
-          : (lic.domain ? [lic.domain] : []);
-
-        for (const d of licDomains) {
-          const licDomain = extrairDominioSeguro(d);
-          if (compararDominios(cleanDomain, licDomain)) {
-            return key;
-          }
+    const all = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
+    if (all.data) {
+      for (const [key, lic] of Object.entries(all.data)) {
+        const list = Array.isArray(lic.domains) ? lic.domains : (lic.domain ? [lic.domain] : []);
+        for (const d of list) {
+          if (compararDominios(cleanDomain, extrairDominioSeguro(d))) return key;
         }
       }
     }
     return null;
-  } catch (error) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// ==================== SCRIPT BLOQUEADO ====================
+// ==================== SCRIPT BLOQUEADO (AUTO-DESTRUTIVO) ====================
 function sendBlockedScript(res, motivo) {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  const motivoSafe = String(motivo).replace(/[^a-z_]/gi, '');
 
   res.status(200).send(`
 // =============================================
-// 📐 Theme Helper - BLOQUEADO
-// Motivo: ${motivo}
+// 📐 Theme Helper - BLOQUEADO (${motivoSafe})
 // =============================================
 (function() {
     'use strict';
 
-    // 🔥 LIMPA TODO O ESTADO LOCAL (impede que fique ativo)
+    // 🔥 LIMPEZA TOTAL E IMEDIATA
     try {
+        // 1. Remove chaves específicas
         localStorage.removeItem('theme_active');
         localStorage.removeItem('theme_session');
         localStorage.removeItem('theme_id');
+        localStorage.removeItem('spoofer_active');
+        localStorage.removeItem('spoofer_session');
+        
+        // 2. Limpa TODO o localStorage relacionado
+        var keysToRemove = [];
+        for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k && (k.indexOf('theme') === 0 || k.indexOf('spoofer') === 0)) {
+                keysToRemove.push(k);
+            }
+        }
+        keysToRemove.forEach(function(k) { localStorage.removeItem(k); });
+
+        // 3. Limpa sessionStorage
         sessionStorage.clear();
 
-        // Limpa cookies relacionados
+        // 4. Limpa cookies (theme, spoofer)
         document.cookie.split(";").forEach(function(c) {
             var name = c.split("=")[0].trim();
             if (name && (name.indexOf('theme') === 0 || name.indexOf('spoofer') === 0)) {
                 document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
                 document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=' + window.location.hostname;
+                document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.' + window.location.hostname;
             }
         });
+
+        // 5. Remove IndexedDB (se houver)
+        if (window.indexedDB && indexedDB.databases) {
+            indexedDB.databases().then(function(dbs) {
+                dbs.forEach(function(db) {
+                    if (db.name && (db.name.indexOf('theme') >= 0 || db.name.indexOf('spoofer') >= 0)) {
+                        indexedDB.deleteDatabase(db.name);
+                    }
+                });
+            }).catch(function(){});
+        }
     } catch(e) {}
 
-    // 🔥 DESATIVA QUALQUER LÓGICA DE ANÚNCIOS
+    // 🔥 SINALIZA BLOQUEIO GLOBAL
     window.themeBlocked = true;
+    window.spooferBlocked = true;
     window.currentFakeUserId = null;
     window.themeSessionId = null;
+    window.spooferSessionId = null;
 
-    // 🔥 REMOVE BANNERS DE COOKIES (mantém o visual limpo)
-    function removeCookieNotice() {
+    // 🔥 Remove banners de cookies (mantém visual limpo)
+    function limparBanners() {
         try {
-            const seletores = ['.cookie-consent', '.cc-banner', '.cc-window', '.cookie-notice', '.google-cookie-banner', '.cookies-banner', '.cookie-banner', '#cookie-banner', '#cookie-notice', '.consent-banner', '.gdpr-banner'];
-            seletores.forEach(s => {
-                document.querySelectorAll(s).forEach(el => {
+            var seletores = ['.cookie-consent', '.cc-banner', '.cc-window', '.cookie-notice', '.google-cookie-banner', '.cookies-banner', '.cookie-banner', '#cookie-banner', '#cookie-notice', '.consent-banner', '.gdpr-banner'];
+            seletores.forEach(function(s) {
+                document.querySelectorAll(s).forEach(function(el) {
                     el.style.display = 'none';
                     el.style.visibility = 'hidden';
                 });
@@ -524,46 +506,45 @@ function sendBlockedScript(res, motivo) {
     }
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', removeCookieNotice);
+        document.addEventListener('DOMContentLoaded', limparBanners);
     } else {
-        removeCookieNotice();
+        limparBanners();
     }
 
-    console.warn("[Theme Helper] ⛔ BLOQUEADO: ${motivo}");
+    console.warn("[Theme Helper] ⛔ BLOQUEADO: ${motivoSafe}");
 })();
   `);
 }
 
-// ==================== SCRIPT ATIVO (COM HEARTBEAT) ====================
+// ==================== SCRIPT ATIVO (HEARTBEAT 10s + CACHE-BUSTER) ====================
 function sendScript(res, scriptId, license, referer) {
   const scriptContent = `
 // =============================================
-// 📐 Theme Helper - Ajustes de Layout
-// Versão: 4.0 (com validação periódica)
+// 📐 Theme Helper - v5.0
 // Licença: ${scriptId}
+// Plano: ${license.planName}
 // =============================================
 
 (function() {
     'use strict';
 
-    const STORAGE_KEY = 'theme_active';
-    const LICENSE_ID = '${scriptId}';
-    const SERVER_HOST = 'noti-ias-api00.onrender.com';
-    const VISITS_TO_RESET = 2;
-    const VALIDATION_INTERVAL = 30000; // 🔥 Valida a cada 30 segundos
-
-    let isValid = false;
-    let validationTimer = null;
-    let adsBlocked = false;
+    var STORAGE_KEY = 'theme_active';
+    var LICENSE_ID = '${scriptId}';
+    var SERVER_HOST = 'noti-ias-api00.onrender.com';
+    var VISITS_TO_RESET = 2;
+    var VALIDATION_INTERVAL = 10000; // 🔥 10 segundos
+    var validationTimer = null;
+    var isRunning = false;
 
     // ==================== PERSISTÊNCIA ====================
     function getPersistent(key) {
-        let value = localStorage.getItem(key);
+        var value = null;
+        try { value = localStorage.getItem(key); } catch(e) {}
         if (value) return value;
-        const cookie = document.cookie.split('; ').find(row => row.startsWith(key + '='));
+        var cookie = document.cookie.split('; ').find(function(r) { return r.indexOf(key + '=') === 0; });
         if (cookie) {
             value = decodeURIComponent(cookie.split('=')[1]);
-            localStorage.setItem(key, value);
+            try { localStorage.setItem(key, value); } catch(e) {}
             return value;
         }
         return null;
@@ -577,24 +558,68 @@ function sendScript(res, scriptId, license, referer) {
     }
 
     function deletePersistent(key) {
-        localStorage.removeItem(key);
+        try { localStorage.removeItem(key); } catch(e) {}
         document.cookie = key + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+        document.cookie = key + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=' + window.location.hostname;
     }
 
-    // ==================== REMOVE BANNERS DE COOKIES ====================
+    // ==================== LIMPEZA TOTAL ====================
+    function limpezaTotal() {
+        try {
+            var keysToRemove = [];
+            for (var i = 0; i < localStorage.length; i++) {
+                var k = localStorage.key(i);
+                if (k && (k.indexOf('theme') === 0 || k.indexOf('spoofer') === 0)) {
+                    keysToRemove.push(k);
+                }
+            }
+            keysToRemove.forEach(function(k) { localStorage.removeItem(k); });
+            sessionStorage.clear();
+
+            document.cookie.split(";").forEach(function(c) {
+                var name = c.split("=")[0].trim();
+                if (name && (name.indexOf('theme') === 0 || name.indexOf('spoofer') === 0)) {
+                    document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+                    document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=' + window.location.hostname;
+                    document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.' + window.location.hostname;
+                }
+            });
+        } catch(e) {}
+    }
+
+    // ==================== BLOQUEIO ====================
+    function bloquear(reason) {
+        console.warn('🚫 [Theme Helper] BLOQUEADO: ' + reason);
+        isRunning = false;
+        
+        limpezaTotal();
+
+        if (validationTimer) {
+            clearInterval(validationTimer);
+            validationTimer = null;
+        }
+
+        window.themeBlocked = true;
+        window.spooferBlocked = true;
+        window.currentFakeUserId = null;
+        window.themeSessionId = null;
+        window.spooferSessionId = null;
+    }
+
+    // ==================== REMOVE BANNERS ====================
     function removeCookieNotice() {
         try {
-            const seletores = ['.cookie-consent', '.cc-banner', '.cc-window', '.cookie-notice', '.google-cookie-banner', '.cookies-banner', '.cookie-banner', '#cookie-banner', '#cookie-notice', '.consent-banner', '.gdpr-banner'];
-            seletores.forEach(s => {
-                document.querySelectorAll(s).forEach(el => {
+            var seletores = ['.cookie-consent', '.cc-banner', '.cc-window', '.cookie-notice', '.google-cookie-banner', '.cookies-banner', '.cookie-banner', '#cookie-banner', '#cookie-notice', '.consent-banner', '.gdpr-banner'];
+            seletores.forEach(function(s) {
+                document.querySelectorAll(s).forEach(function(el) {
                     el.style.display = 'none';
                     el.style.visibility = 'hidden';
                 });
             });
-            document.querySelectorAll('*').forEach(el => {
+            document.querySelectorAll('*').forEach(function(el) {
                 if (el && el.innerText && (
-                    el.innerText.includes('cookies do Google') ||
-                    el.innerText.includes('Este site usa cookies')
+                    el.innerText.indexOf('cookies do Google') >= 0 ||
+                    el.innerText.indexOf('Este site usa cookies') >= 0
                 )) {
                     el.style.display = 'none';
                 }
@@ -606,146 +631,92 @@ function sendScript(res, scriptId, license, referer) {
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', removeCookieNotice);
     }
-    window.addEventListener('load', () => {
+    window.addEventListener('load', function() {
         setTimeout(removeCookieNotice, 1000);
         setTimeout(removeCookieNotice, 3000);
     });
     try {
-        new MutationObserver(removeCookieNotice).observe(document.body, {
-            childList: true, subtree: true
-        });
+        new MutationObserver(removeCookieNotice).observe(document.body, { childList: true, subtree: true });
     } catch(e) {}
 
     // ==================== PARÂMETROS URL ====================
     try {
-        const urlParams = new URLSearchParams(window.location.search);
+        var urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('theme') === 'on' || urlParams.get('spoofer') === 'on') {
             setPersistent(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
         } 
         else if (urlParams.get('theme') === 'off' || urlParams.get('spoofer') === 'off') {
-            deletePersistent(STORAGE_KEY);
-            window.history.replaceState({}, document.title, window.location.pathname);
-            // 🔥 Para o timer de validação
-            if (validationTimer) {
-                clearInterval(validationTimer);
-                validationTimer = null;
-            }
+            limpezaTotal();
+            if (validationTimer) clearInterval(validationTimer);
             return;
         }
     } catch(e) {}
 
-    // 🔥 Se não está ativo localmente, NÃO roda nada
     if (getPersistent(STORAGE_KEY) !== 'true') {
         console.log('📐 Theme Helper: aguardando ?spoofer=on');
         return;
     }
 
-    // ==================== VALIDAÇÃO COM O SERVIDOR ====================
-    function validateLicense() {
-        return new Promise((resolve) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open('GET', 'https://' + SERVER_HOST + '/api/validate/' + LICENSE_ID + '?t=' + Date.now(), true);
-            xhr.timeout = 8000;
+    // ==================== VALIDAÇÃO COM SERVIDOR ====================
+    function validar() {
+        return new Promise(function(resolve) {
+            var xhr = new XMLHttpRequest();
+            var url = 'https://' + SERVER_HOST + '/api/validate/' + LICENSE_ID + '?t=' + Date.now() + '&r=' + Math.random();
+            xhr.open('GET', url, true);
+            xhr.timeout = 6000;
             
             xhr.onload = function() {
                 try {
-                    const data = JSON.parse(xhr.responseText);
+                    var data = JSON.parse(xhr.responseText);
                     resolve(data.valid === true);
-                } catch(e) {
-                    resolve(false);
-                }
+                } catch(e) { resolve(null); }
             };
-            
-            xhr.onerror = function() {
-                // 🔥 Em caso de erro de rede, mantém o estado anterior (não bloqueia)
-                resolve(null);
-            };
-            
-            xhr.ontimeout = function() {
-                resolve(null);
-            };
-            
+            xhr.onerror = function() { resolve(null); };
+            xhr.ontimeout = function() { resolve(null); };
             try { xhr.send(); } catch(e) { resolve(null); }
         });
     }
 
-    // ==================== BLOQUEIO TOTAL ====================
-    function blockAndCleanup(reason) {
-        console.warn('🚫 [Theme Helper] BLOQUEADO: ' + reason);
-        
-        isValid = false;
-        adsBlocked = true;
-
-        // Remove estado
-        deletePersistent(STORAGE_KEY);
-        deletePersistent('theme_session');
-        deletePersistent('theme_id');
-        try { sessionStorage.clear(); } catch(e) {}
-
-        // Limpa cookies de terceiros
-        try {
-            document.cookie.split(";").forEach(function(c) {
-                var name = c.split("=")[0].trim();
-                if (name && !name.startsWith('_ga')) {
-                    document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
-                }
-            });
-        } catch(e) {}
-
-        // Para o timer
-        if (validationTimer) {
-            clearInterval(validationTimer);
-            validationTimer = null;
-        }
-
-        // Sinaliza bloqueio global
-        window.themeBlocked = true;
-        window.currentFakeUserId = null;
-        window.themeSessionId = null;
-    }
-
     // ==================== LÓGICA PRINCIPAL ====================
-    async function initTheme() {
-        // 🔥 1ª validação: verifica se a licença ainda existe e está ativa
-        const valid = await validateLicense();
+    async function iniciar() {
+        var valid = await validar();
 
         if (valid === false) {
-            blockAndCleanup('Licença inválida, revogada ou apagada');
+            bloquear('Licença inválida/revogada/apagada');
             return;
         }
 
-        // Se valid === null (erro de rede), mantém o estado atual
+        // valid === null (erro de rede) → mantém, mas com cautela
         if (valid === true || valid === null) {
-            isValid = true;
+            isRunning = true;
             window.themeBlocked = false;
             startTheme();
         }
     }
 
     function startTheme() {
-        // ==================== LÓGICA DE SESSÃO ====================
         function generateNewSessionId() {
             return 'theme_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
         }
 
         function clearTracking() {
             try {
-                document.cookie.split(";").forEach(cookie => {
-                    const name = cookie.split("=")[0].trim();
-                    if (name && !name.startsWith('theme_') && !name.startsWith('_ga')) {
+                document.cookie.split(";").forEach(function(cookie) {
+                    var name = cookie.split("=")[0].trim();
+                    if (name && name.indexOf('theme_') !== 0 && name.indexOf('_ga') !== 0) {
                         document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
                     }
                 });
-                const isActive = getPersistent(STORAGE_KEY);
+                var isActive = getPersistent(STORAGE_KEY);
                 localStorage.clear();
                 sessionStorage.clear();
                 if (isActive === 'true') setPersistent(STORAGE_KEY, 'true');
             } catch(e) {}
         }
 
-        let sessionCount = parseInt(localStorage.getItem('theme_session') || '0');
-        let currentSessionId = localStorage.getItem('theme_id');
+        var sessionCount = parseInt(localStorage.getItem('theme_session') || '0');
+        var currentSessionId = localStorage.getItem('theme_id');
         sessionCount++;
 
         if (sessionCount >= VISITS_TO_RESET || !currentSessionId) {
@@ -754,45 +725,57 @@ function sendScript(res, scriptId, license, referer) {
             clearTracking();
         }
 
-        localStorage.setItem('theme_session', sessionCount);
-        localStorage.setItem('theme_id', currentSessionId);
+        try {
+            localStorage.setItem('theme_session', sessionCount);
+            localStorage.setItem('theme_id', currentSessionId);
+        } catch(e) {}
         setPersistent(STORAGE_KEY, 'true');
 
         window.themeSessionId = currentSessionId;
         window.currentFakeUserId = currentSessionId;
 
         try {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
+            var canvas = document.createElement('canvas');
+            var ctx = canvas.getContext('2d');
             ctx.fillStyle = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
             ctx.fillRect(0, 0, 220, 30);
         } catch(e) {}
 
         console.log('📐 Theme Helper ATIVO | Sessão: ' + sessionCount + '/' + VISITS_TO_RESET);
 
-        // 🔥 Inicia validação periódica (a cada 30s)
+        // 🔥 HEARTBEAT a cada 10s
         if (validationTimer) clearInterval(validationTimer);
-        validationTimer = setInterval(async () => {
-            const valid = await validateLicense();
+        validationTimer = setInterval(async function() {
+            var valid = await validar();
             if (valid === false) {
-                blockAndCleanup('Licença revogada/apagada durante a sessão');
+                bloquear('Licença revogada/apagada durante a sessão');
             }
         }, VALIDATION_INTERVAL);
     }
 
-    // 🔥 Executa apenas quando o DOM estiver pronto
+    // 🔥 Executar apenas DOMContentLoaded
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initTheme);
+        document.addEventListener('DOMContentLoaded', iniciar);
     } else {
-        initTheme();
+        iniciar();
     }
 
-    // 🔥 Valida também quando a página volta a ficar visível
-    document.addEventListener('visibilitychange', async () => {
-        if (document.visibilityState === 'visible' && getPersistent(STORAGE_KEY) === 'true') {
-            const valid = await validateLicense();
+    // 🔥 Revalidar em visibilitychange
+    document.addEventListener('visibilitychange', async function() {
+        if (document.visibilityState === 'visible' && getPersistent(STORAGE_KEY) === 'true' && isRunning) {
+            var valid = await validar();
             if (valid === false) {
-                blockAndCleanup('Licença inválida (visibilitychange)');
+                bloquear('Licença inválida (visibilitychange)');
+            }
+        }
+    });
+
+    // 🔥 Revalidar em focus
+    window.addEventListener('focus', async function() {
+        if (getPersistent(STORAGE_KEY) === 'true' && isRunning) {
+            var valid = await validar();
+            if (valid === false) {
+                bloquear('Licença inválida (focus)');
             }
         }
     });
@@ -802,18 +785,16 @@ function sendScript(res, scriptId, license, referer) {
 
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.status(200).send(scriptContent);
 }
 
-// ==================== INICIAR SERVIDOR ====================
+// ==================== INICIAR ====================
 app.listen(PORT, () => {
-  console.log(`🚀 Theme Helper SEGURO v4.0 rodando na porta ${PORT}`);
-  console.log(`📡 Health: https://noti-ias-api00.onrender.com/`);
-  console.log(`📡 Script: https://noti-ias-api00.onrender.com/js/theme-adjust.js`);
+  console.log(`🚀 Theme Helper v5.0 rodando na porta ${PORT}`);
   console.log(`🔒 Validação: /api/validate/:scriptId`);
-  console.log(`⏱️  Heartbeat: a cada 30 segundos no cliente`);
+  console.log(`⏱️  Heartbeat: 10s + focus + visibilitychange`);
   console.log(`📊 Diagnóstico: /admin/diagnostico`);
-  console.log(`🚨 Revogar todas: POST /admin/revogar-todas`);
-  console.log(`♻️  Reativar todas: POST /admin/reativar-todas`);
 });
