@@ -1,8 +1,4 @@
-// ==================== BACKEND SEGURO v4.1 ====================
-// + Plano PERMANENTE (Infinity)
-// + Multi-domínio (domains[], allDomains)
-// + Ativação por spoofer (timer começa na ativação)
-// ============================================================
+// ==================== BACKEND SEGURO + EXPIRAÇÃO REAL ====================
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -22,11 +18,10 @@ const FIREBASE_DB_URL = "https://maestro-server-pro-default-rtdb.firebaseio.com"
 
 // ==================== DURAÇÃO DOS PLANOS ====================
 const PLAN_DURATIONS = {
-  'Grátis': 600,
-  'Diário': 86400,
-  'Semanal': 604800,
-  'Mensal': 2592000,
-  'Permanente': Infinity
+  'Grátis': 600,      // 10 minutos
+  'Diário': 86400,    // 24 horas
+  'Semanal': 604800,  // 7 dias
+  'Mensal': 2592000   // 30 dias
 };
 
 // ==================== HEALTH CHECK ====================
@@ -39,7 +34,7 @@ app.get('/', (req, res) => {
       <div style="text-align:center;">
         <h2>📐 Theme Helper</h2>
         <p style="color:#10b981;">✅ Online</p>
-        <p style="color:#94a3b8;font-size:14px;">Versão: 4.1 (Permanente + Ativação)</p>
+        <p style="color:#94a3b8;font-size:14px;">Versão: 3.0 (Expiração Real)</p>
       </div>
     </body>
     </html>
@@ -54,48 +49,6 @@ app.get('/js/responsive-fix.js', handleScript);
 app.get('/script/:scriptId.js', async (req, res) => {
   const scriptId = req.params.scriptId;
   await handleScriptInternal(req, res, scriptId);
-});
-
-// ==================== 🔥 ENDPOINT DE ATIVAÇÃO ====================
-app.post('/register-activation/:scriptId', async (req, res) => {
-  const scriptId = req.params.scriptId;
-  const referer = req.get('Referer') || req.get('Origin') || '';
-
-  try {
-    const response = await axios.get(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`);
-    const license = response.data;
-
-    if (!license) {
-      return res.status(404).json({ ok: false, msg: 'Licença não encontrada' });
-    }
-
-    const cleanReferer = extrairDominioSeguro(referer);
-    if (!isDominioAutorizado(cleanReferer, license)) {
-      return res.status(403).json({ ok: false, msg: 'Domínio não autorizado' });
-    }
-
-    // Se já tem spooferActivatedAt, não mexe
-    if (license.spooferActivatedAt) {
-      return res.json({ 
-        ok: true, 
-        msg: 'Já registrado', 
-        spooferActivatedAt: license.spooferActivatedAt 
-      });
-    }
-
-    const agora = new Date().toISOString();
-    await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
-      spooferActivatedAt: agora
-    });
-
-    console.log(`🎬 [${scriptId}] Ativação registrada: ${cleanReferer} → ${agora}`);
-
-    res.json({ ok: true, msg: 'Ativação registrada', spooferActivatedAt: agora });
-
-  } catch (error) {
-    console.error(`💥 [${scriptId}] Erro ao registrar ativação:`, error.message);
-    res.status(500).json({ ok: false, msg: error.message });
-  }
 });
 
 // ==================== FUNÇÃO PRINCIPAL ====================
@@ -114,7 +67,7 @@ async function handleScript(req, res) {
   await handleScriptInternal(req, res, scriptId);
 }
 
-// ==================== LÓGICA INTERNA ====================
+// ==================== LÓGICA INTERNA (COM EXPIRAÇÃO REAL) ====================
 async function handleScriptInternal(req, res, scriptId) {
   const referer = req.get('Referer') || req.get('Origin') || '';
 
@@ -130,72 +83,49 @@ async function handleScriptInternal(req, res, scriptId) {
       return sendBlockedScript(res, "Licença não encontrada");
     }
 
-    // VALIDAÇÃO 1: Ativa?
+    // 🔥 VALIDAÇÃO 1: Está ativa?
     if (license.active !== true) {
       return sendBlockedScript(res, "Aguardando aprovação do Administrador");
     }
 
-    // VALIDAÇÃO 2: Expiração
-    const isPermanent = license.planName === 'Permanente';
-
-    if (!isPermanent) {
-      const duration = PLAN_DURATIONS[license.planName];
-      if (!duration || duration === Infinity) {
-        return sendBlockedScript(res, "Plano inválido");
-      }
-
-      const startTime = license.spooferActivatedAt 
-        ? new Date(license.spooferActivatedAt).getTime() 
-        : new Date(license.createdAt).getTime();
-      
-      const elapsed = (Date.now() - startTime) / 1000;
-      const remaining = duration - elapsed;
-
-      if (remaining <= 0) {
-        console.log(`⏰ [${scriptId}] EXPIRADO. Desativando...`);
-        
-        await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
-          active: false,
-          expiredAt: new Date().toISOString(),
-          reason: 'Tempo expirado'
-        });
-        
-        return sendBlockedScript(res, "Plano expirado. Renove seu plano.");
-      }
-    } else {
-      console.log(`♾️ [${scriptId}] Plano PERMANENTE — sem expiração`);
+    // 🔥 VALIDAÇÃO 2: EXPIRAÇÃO REAL (baseada em createdAt ou spooferActivatedAt)
+    const duration = PLAN_DURATIONS[license.planName];
+    if (!duration) {
+      return sendBlockedScript(res, "Plano inválido");
     }
 
-    // VALIDAÇÃO 3: Domínios
-    if (referer) {
-      const cleanReferer = extrairDominioSeguro(referer);
+    const startTime = license.spooferActivatedAt 
+      ? new Date(license.spooferActivatedAt).getTime() 
+      : new Date(license.createdAt).getTime();
+    
+    const elapsed = (Date.now() - startTime) / 1000;
+    const remaining = duration - elapsed;
 
-      if (!isDominioAutorizado(cleanReferer, license)) {
-        console.log(`🚫 [${scriptId}] Domínio não autorizado: ${cleanReferer}`);
+    if (remaining <= 0) {
+      console.log(`⏰ [${scriptId}] EXPIRADO. Desativando no Firebase...`);
+      
+      // 🔥 DESATIVAR NO FIREBASE (não é mais só no frontend!)
+      await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
+        active: false,
+        expiredAt: new Date().toISOString(),
+        reason: 'Tempo expirado'
+      });
+      
+      return sendBlockedScript(res, "Plano expirado. Renove seu plano.");
+    }
+
+    // 🔥 VALIDAÇÃO 3: Domínio autorizado
+    if (referer && license.domain) {
+      const cleanReferer = extrairDominioSeguro(referer);
+      const cleanDomain = extrairDominioSeguro(license.domain);
+
+      if (!compararDominios(cleanReferer, cleanDomain)) {
+        console.log(`🚫 [${scriptId}] Domínio não autorizado: ${cleanReferer} ≠ ${cleanDomain}`);
         return sendBlockedScript(res, "Domínio não autorizado");
       }
-
-      if (license.allDomains === true) {
-        console.log(`✅ [${scriptId}] allDomains=true → ${cleanReferer}`);
-      } else if (Array.isArray(license.domains) && license.domains.length > 0) {
-        console.log(`✅ [${scriptId}] Domínio na lista: ${cleanReferer}`);
-      } else if (license.domain) {
-        console.log(`✅ [${scriptId}] Domínio único: ${cleanReferer}`);
-      }
     }
 
-    // Log final
-    let logRemaining = '∞ (permanente)';
-    if (!isPermanent) {
-      const duration = PLAN_DURATIONS[license.planName];
-      const startTime = license.spooferActivatedAt 
-        ? new Date(license.spooferActivatedAt).getTime() 
-        : new Date(license.createdAt).getTime();
-      const elapsed = (Date.now() - startTime) / 1000;
-      logRemaining = Math.floor(duration - elapsed) + 's';
-    }
-
-    console.log(`✅ [${scriptId}] Script entregue. Restam ${logRemaining}`);
+    console.log(`✅ [${scriptId}] Script entregue. Restam ${Math.floor(remaining)}s`);
     return sendScript(res, scriptId, license, referer);
 
   } catch (error) {
@@ -204,38 +134,11 @@ async function handleScriptInternal(req, res, scriptId) {
   }
 }
 
-// ==================== HELPER: DOMÍNIO AUTORIZADO? ====================
-function isDominioAutorizado(cleanReferer, license) {
-  // Caso 1: "Todos os domínios"
-  if (license.allDomains === true) {
-    return true;
-  }
-
-  // Caso 2: Lista (array)
-  if (Array.isArray(license.domains) && license.domains.length > 0) {
-    for (const d of license.domains) {
-      const cleanD = extrairDominioSeguro(d);
-      if (cleanD && compararDominios(cleanReferer, cleanD)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Caso 3: Domínio único
-  if (license.domain) {
-    const cleanDomain = extrairDominioSeguro(license.domain);
-    return compararDominios(cleanReferer, cleanDomain);
-  }
-
-  // Caso 4: Sem restrição
-  return true;
-}
-
-// ==================== CRON: EXPIRAÇÃO AUTOMÁTICA ====================
+// ==================== 🔥 EXPIRAÇÃO AUTOMÁTICA (NOVO!) ====================
+// Roda a cada 1 minuto, verificando TODAS as licenças ativas
 async function verificarExpiracaoGlobal() {
   try {
-    console.log('🔍 [CRON] Verificando expiração...');
+    console.log('🔍 [CRON] Verificando expiração de todas as licenças...');
     
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     const licenses = response.data;
@@ -247,20 +150,15 @@ async function verificarExpiracaoGlobal() {
 
     let totalVerificadas = 0;
     let totalExpiradas = 0;
-    let totalPermanentes = 0;
 
     for (const [scriptId, license] of Object.entries(licenses)) {
       totalVerificadas++;
       
+      // Só verifica licenças ativas
       if (license.active !== true) continue;
 
-      if (license.planName === 'Permanente') {
-        totalPermanentes++;
-        continue;
-      }
-
       const duration = PLAN_DURATIONS[license.planName];
-      if (!duration || duration === Infinity) continue;
+      if (!duration) continue;
 
       const startTime = license.spooferActivatedAt 
         ? new Date(license.spooferActivatedAt).getTime() 
@@ -270,7 +168,7 @@ async function verificarExpiracaoGlobal() {
       const remaining = duration - elapsed;
 
       if (remaining <= 0) {
-        console.log(`⏰ [CRON] ${scriptId} EXPIROU. Desativando...`);
+        console.log(`⏰ [CRON] Licença ${scriptId} EXPIROU. Desativando...`);
         
         await axios.patch(`${FIREBASE_DB_URL}/licenses/${scriptId}.json`, {
           active: false,
@@ -282,33 +180,36 @@ async function verificarExpiracaoGlobal() {
       }
     }
 
-    console.log(`✅ [CRON] ${totalVerificadas} verificadas, ${totalExpiradas} expiradas, ${totalPermanentes} permanentes`);
+    console.log(`✅ [CRON] Verificação concluída: ${totalVerificadas} verificadas, ${totalExpiradas} expiradas`);
   } catch (error) {
-    console.error('💥 [CRON] Erro:', error.message);
+    console.error('💥 [CRON] Erro na verificação:', error.message);
   }
 }
 
+// Rodar a cada 60 segundos (1 minuto)
 setInterval(verificarExpiracaoGlobal, 60000);
+
+// Rodar imediatamente ao iniciar
 setTimeout(verificarExpiracaoGlobal, 5000);
 
-// ==================== REVOGAR TODAS ====================
+// ==================== 🔥 REVOGAR TODAS AS LICENÇAS (ADMIN) ====================
 app.post('/admin/revogar-todas', async (req, res) => {
   const { confirmacao } = req.body;
   
   if (confirmacao !== 'REVOGAR_TODAS_AGORA') {
     return res.status(400).json({ 
-      erro: 'Confirmação inválida' 
+      erro: 'Confirmação inválida. Envie { "confirmacao": "REVOGAR_TODAS_AGORA" }' 
     });
   }
 
   try {
-    console.log('🚨 [ADMIN] REVOGANDO TODAS...');
+    console.log('🚨 [ADMIN] REVOGANDO TODAS AS LICENÇAS...');
     
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     const licenses = response.data;
     
     if (!licenses) {
-      return res.json({ mensagem: 'Nenhuma licença', total: 0 });
+      return res.json({ mensagem: 'Nenhuma licença para revogar', total: 0 });
     }
 
     const updates = {};
@@ -317,42 +218,45 @@ app.post('/admin/revogar-todas', async (req, res) => {
     for (const scriptId of Object.keys(licenses)) {
       updates[`${scriptId}/active`] = false;
       updates[`${scriptId}/revogadaEm`] = new Date().toISOString();
-      updates[`${scriptId}/revogadaMotivo`] = 'Revogação em massa';
+      updates[`${scriptId}/revogadaMotivo`] = 'Revogação em massa pelo admin';
       total++;
     }
 
     await axios.patch(`${FIREBASE_DB_URL}/licenses.json`, updates);
 
-    console.log(`✅ [ADMIN] ${total} revogadas`);
+    console.log(`✅ [ADMIN] ${total} licenças revogadas`);
     
     res.json({
       sucesso: true,
-      mensagem: `✅ ${total} licenças revogadas`,
+      mensagem: `✅ ${total} licenças revogadas com sucesso`,
       total,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
+    console.error('💥 [ADMIN] Erro ao revogar:', error.message);
     res.status(500).json({ erro: error.message });
   }
 });
 
-// ==================== REATIVAR TODAS ====================
+// ==================== 🔥 REATIVAR TODAS (COM PRAZO ZERADO) ====================
 app.post('/admin/reativar-todas', async (req, res) => {
-  const { confirmacao } = req.body;
+  const { confirmacao, plano } = req.body;
   
   if (confirmacao !== 'REATIVAR_TODAS_AGORA') {
-    return res.status(400).json({ erro: 'Confirmação inválida' });
+    return res.status(400).json({ 
+      erro: 'Confirmação inválida' 
+    });
   }
 
   try {
-    console.log('🚨 [ADMIN] REATIVANDO TODAS...');
+    console.log('🚨 [ADMIN] REATIVANDO TODAS AS LICENÇAS...');
     
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     const licenses = response.data;
     
     if (!licenses) {
-      return res.json({ mensagem: 'Nenhuma licença', total: 0 });
+      return res.json({ mensagem: 'Nenhuma licença para reativar', total: 0 });
     }
 
     const updates = {};
@@ -361,31 +265,32 @@ app.post('/admin/reativar-todas', async (req, res) => {
 
     for (const scriptId of Object.keys(licenses)) {
       updates[`${scriptId}/active`] = true;
-      updates[`${scriptId}/createdAt`] = agora;
-      updates[`${scriptId}/spooferActivatedAt`] = null;
-      updates[`${scriptId}/expiredAt`] = null;
-      updates[`${scriptId}/revogadaEm`] = null;
-      updates[`${scriptId}/reativadaEm`] = agora;
+      updates[`${scriptId}/createdAt`] = agora;      // Zera o tempo
+      updates[`${scriptId}/spooferActivatedAt`] = null; // Zera ativação
+      updates[`${scriptId}/expiredAt`] = null;       // Limpa expiração
+      updates[`${scriptId}/revogadaEm`] = null;      // Limpa revogação
+      updates[`${scriptId}/reativadaEm`] = agora;    // Marca reativação
       total++;
     }
 
     await axios.patch(`${FIREBASE_DB_URL}/licenses.json`, updates);
 
-    console.log(`✅ [ADMIN] ${total} reativadas`);
+    console.log(`✅ [ADMIN] ${total} licenças reativadas (tempo zerado)`);
     
     res.json({
       sucesso: true,
-      mensagem: `✅ ${total} licenças reativadas`,
+      mensagem: `✅ ${total} licenças reativadas com tempo zerado`,
       total,
       timestamp: agora
     });
 
   } catch (error) {
+    console.error('💥 [ADMIN] Erro ao reativar:', error.message);
     res.status(500).json({ erro: error.message });
   }
 });
 
-// ==================== DIAGNÓSTICO ====================
+// ==================== 🔥 DIAGNÓSTICO COMPLETO ====================
 app.get('/admin/diagnostico', async (req, res) => {
   try {
     const response = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
@@ -396,38 +301,31 @@ app.get('/admin/diagnostico', async (req, res) => {
     }
 
     const diagnostico = Object.entries(licenses).map(([scriptId, lic]) => {
-      const isPermanent = lic.planName === 'Permanente';
-      const duration = isPermanent ? Infinity : (PLAN_DURATIONS[lic.planName] || 0);
-      
-      let remaining = Infinity;
-      if (!isPermanent && duration !== Infinity) {
-        const startTime = lic.spooferActivatedAt 
-          ? new Date(lic.spooferActivatedAt).getTime() 
-          : new Date(lic.createdAt).getTime();
-        const elapsed = (Date.now() - startTime) / 1000;
-        remaining = Math.max(0, duration - elapsed);
-      }
+      const duration = PLAN_DURATIONS[lic.planName] || 0;
+      const startTime = lic.spooferActivatedAt 
+        ? new Date(lic.spooferActivatedAt).getTime() 
+        : new Date(lic.createdAt).getTime();
+      const elapsed = (Date.now() - startTime) / 1000;
+      const remaining = Math.max(0, duration - elapsed);
 
       return {
         scriptId,
-        domain: lic.domain || null,
-        domains: lic.domains || null,
-        allDomains: lic.allDomains || false,
+        domain: lic.domain,
         plano: lic.planName,
         ativa: lic.active === true,
-        permanente: isPermanent,
-        spooferActivatedAt: lic.spooferActivatedAt || null,
-        duracao: isPermanent ? '∞' : duration + 's',
-        restante: isPermanent ? '∞' : Math.floor(remaining) + 's',
-        expirada: isPermanent ? false : remaining <= 0
+        duracao: duration + 's',
+        decorrido: Math.floor(elapsed) + 's',
+        restante: Math.floor(remaining) + 's',
+        expirada: remaining <= 0,
+        deveSerDesativada: lic.active === true && remaining <= 0
       };
     });
 
     res.json({
       total: diagnostico.length,
       ativas: diagnostico.filter(d => d.ativa).length,
-      permanentes: diagnostico.filter(d => d.permanente).length,
       expiradas: diagnostico.filter(d => d.expirada).length,
+      precisamCorrecao: diagnostico.filter(d => d.deveSerDesativada).length,
       licencas: diagnostico
     });
 
@@ -482,34 +380,12 @@ async function buscarLicencaPorDominio(referer) {
     const allLicenses = await axios.get(`${FIREBASE_DB_URL}/licenses.json`);
     
     if (allLicenses.data) {
-      // Passo 1: match exato de domain
       for (const [key, lic] of Object.entries(allLicenses.data)) {
-        if (!lic.active) continue;
-        if (lic.domain) {
-          const licDomain = extrairDominioSeguro(lic.domain);
-          if (compararDominios(cleanDomain, licDomain)) {
-            return key;
-          }
+        if (!lic.domain) continue;
+        const licDomain = extrairDominioSeguro(lic.domain);
+        if (compararDominios(cleanDomain, licDomain)) {
+          return key;
         }
-      }
-
-      // Passo 2: match em domains[]
-      for (const [key, lic] of Object.entries(allLicenses.data)) {
-        if (!lic.active) continue;
-        if (Array.isArray(lic.domains) && lic.domains.length > 0) {
-          for (const d of lic.domains) {
-            const licDomain = extrairDominioSeguro(d);
-            if (compararDominios(cleanDomain, licDomain)) {
-              return key;
-            }
-          }
-        }
-      }
-
-      // Passo 3: allDomains (fallback)
-      for (const [key, lic] of Object.entries(allLicenses.data)) {
-        if (!lic.active) continue;
-        if (lic.allDomains === true) return key;
       }
     }
     return null;
@@ -535,13 +411,10 @@ function sendBlockedScript(res, motivo) {
 }
 
 function sendScript(res, scriptId, license, referer) {
-  const isPermanent = license.planName === 'Permanente';
-  const backendHost = 'noti-ias-api00.onrender.com';
-
   const scriptContent = `
 // =============================================
 // 📐 Theme Helper - Ajustes de Layout
-// Versão: 4.1 | Plano: ${license.planName} ${isPermanent ? '(PERMANENTE ∞)' : ''}
+// Versão: 3.0
 // Licença: ${scriptId}
 // =============================================
 
@@ -550,25 +423,6 @@ function sendScript(res, scriptId, license, referer) {
 
     const STORAGE_KEY = 'theme_active';
     const VISITS_TO_RESET = 2;
-    const SCRIPT_ID = '${scriptId}';
-    const BACKEND_HOST = '${backendHost}';
-
-    function registrarAtivacao() {
-        try {
-            if (sessionStorage.getItem('theme_activation_sent') === '1') return;
-            
-            fetch('https://' + BACKEND_HOST + '/register-activation/' + SCRIPT_ID, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ts: Date.now() })
-            })
-            .then(r => r.json())
-            .then(d => {
-                if (d && d.ok) sessionStorage.setItem('theme_activation_sent', '1');
-            })
-            .catch(() => {});
-        } catch(e) {}
-    }
 
     function getPersistent(key) {
         let value = localStorage.getItem(key);
@@ -603,6 +457,14 @@ function sendScript(res, scriptId, license, referer) {
                     el.style.visibility = 'hidden';
                 });
             });
+            document.querySelectorAll('*').forEach(el => {
+                if (el && el.innerText && (
+                    el.innerText.includes('cookies do Google') ||
+                    el.innerText.includes('Este site usa cookies')
+                )) {
+                    el.style.display = 'none';
+                }
+            });
         } catch(e) {}
     }
 
@@ -614,13 +476,17 @@ function sendScript(res, scriptId, license, referer) {
         setTimeout(removeCookieNotice, 1000);
         setTimeout(removeCookieNotice, 3000);
     });
+    try {
+        new MutationObserver(removeCookieNotice).observe(document.body, {
+            childList: true, subtree: true
+        });
+    } catch(e) {}
 
     try {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('theme') === 'on' || urlParams.get('spoofer') === 'on') {
             setPersistent(STORAGE_KEY, 'true');
             window.history.replaceState({}, document.title, window.location.pathname);
-            registrarAtivacao();
         } 
         else if (urlParams.get('theme') === 'off' || urlParams.get('spoofer') === 'off') {
             deletePersistent(STORAGE_KEY);
@@ -631,10 +497,23 @@ function sendScript(res, scriptId, license, referer) {
 
     if (getPersistent(STORAGE_KEY) !== 'true') return;
 
-    registrarAtivacao();
-
     function generateNewSessionId() {
         return 'theme_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
+    }
+
+    function clearTracking() {
+        try {
+            document.cookie.split(";").forEach(cookie => {
+                const name = cookie.split("=")[0].trim();
+                if (name && !name.startsWith('theme_') && !name.startsWith('_ga')) {
+                    document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+                }
+            });
+            const isActive = getPersistent(STORAGE_KEY);
+            localStorage.clear();
+            sessionStorage.clear();
+            if (isActive === 'true') setPersistent(STORAGE_KEY, 'true');
+        } catch(e) {}
     }
 
     let sessionCount = parseInt(localStorage.getItem('theme_session') || '0');
@@ -644,6 +523,7 @@ function sendScript(res, scriptId, license, referer) {
     if (sessionCount >= VISITS_TO_RESET || !currentSessionId) {
         currentSessionId = generateNewSessionId();
         sessionCount = 1;
+        clearTracking();
     }
 
     localStorage.setItem('theme_session', sessionCount);
@@ -653,7 +533,14 @@ function sendScript(res, scriptId, license, referer) {
     window.themeSessionId = currentSessionId;
     window.currentFakeUserId = currentSessionId;
 
-    console.log('📐 Theme Helper ativo ${isPermanent ? '| ♾️ PERMANENTE' : ''} | Sessão: ' + sessionCount);
+    try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+        ctx.fillRect(0, 0, 220, 30);
+    } catch(e) {}
+
+    console.log('📐 Theme Helper ativo | Sessão: ' + sessionCount + '/' + VISITS_TO_RESET);
 })();
   `;
 
@@ -665,10 +552,11 @@ function sendScript(res, scriptId, license, referer) {
 
 // ==================== INICIAR SERVIDOR ====================
 app.listen(PORT, () => {
-  console.log(`🚀 Theme Helper v4.1 rodando na porta ${PORT}`);
+  console.log(`🚀 Theme Helper SEGURO v3.0 rodando na porta ${PORT}`);
   console.log(`📡 Health: https://noti-ias-api00.onrender.com/`);
-  console.log(`♾️ Plano PERMANENTE habilitado`);
-  console.log(`🎬 Ativação: POST /register-activation/:scriptId`);
-  console.log(`🔒 Expiração: a cada 60 segundos`);
+  console.log(`📡 Script: https://noti-ias-api00.onrender.com/js/theme-adjust.js`);
+  console.log(`🔒 Expiração automática: a cada 60 segundos`);
   console.log(`📊 Diagnóstico: /admin/diagnostico`);
+  console.log(`🚨 Revogar todas: POST /admin/revogar-todas`);
+  console.log(`♻️ Reativar todas: POST /admin/reativar-todas`);
 });
